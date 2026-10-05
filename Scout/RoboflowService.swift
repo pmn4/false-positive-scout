@@ -78,11 +78,10 @@ class RoboflowService {
         return inferenceResponse.predictions
     }
     
-    // Upload image and annotate as null
+    // Upload image and annotate as null (following Roboflow CLI/SDK pattern)
     func uploadAndNullify(
         image: UIImage,
         imageName: String,
-        workspace: String,
         project: String,
         apiKey: String
     ) async throws -> String {
@@ -90,15 +89,16 @@ class RoboflowService {
         let imageId = try await uploadImage(
             image: image,
             imageName: imageName,
-            workspace: workspace,
             project: project,
             apiKey: apiKey
         )
         
-        // Annotate as null (empty annotation)
+        // Annotate as null using COCO JSON format
         try await annotateAsNull(
             imageId: imageId,
-            workspace: workspace,
+            imageName: imageName,
+            imageWidth: Int(image.size.width),
+            imageHeight: Int(image.size.height),
             project: project,
             apiKey: apiKey
         )
@@ -106,6 +106,7 @@ class RoboflowService {
         return imageId
     }
     
+    // Upload image to Roboflow project
     private func uploadImage(
         image: UIImage,
         imageName: String,
@@ -155,17 +156,40 @@ class RoboflowService {
         throw RoboflowError.uploadFailed(message: "No image ID returned")
     }
     
+    // Annotate image as null using COCO JSON format
+    // Matches Roboflow CLI/SDK mechanism for marking null/negative examples
     private func annotateAsNull(
         imageId: String,
-        workspace: String,
+        imageName: String,
+        imageWidth: Int,
+        imageHeight: Int,
         project: String,
         apiKey: String
     ) async throws {
-        // Create empty annotation (null frame) - api_key and name as query params
+        // Build COCO JSON with image but no annotations (null example)
+        let cocoJson: [String: Any] = [
+            "images": [
+                [
+                    "id": 0,
+                    "file_name": imageName,
+                    "width": imageWidth,
+                    "height": imageHeight
+                ]
+            ],
+            "annotations": [],  // Empty annotations = null example
+            "categories": []
+        ]
+        
+        guard let cocoJsonData = try? JSONSerialization.data(withJSONObject: cocoJson),
+              let cocoJsonString = String(data: cocoJsonData, encoding: .utf8) else {
+            throw RoboflowError.annotationFailed(message: "Failed to create COCO JSON")
+        }
+        
+        // POST to annotate endpoint following Python SDK pattern
         var components = URLComponents(string: "https://api.roboflow.com/dataset/\(project)/annotate/\(imageId)")!
         components.queryItems = [
             URLQueryItem(name: "api_key", value: apiKey),
-            URLQueryItem(name: "name", value: imageId)
+            URLQueryItem(name: "name", value: "\(imageName).coco.json")
         ]
         
         guard let annotateURL = components.url else {
@@ -176,13 +200,13 @@ class RoboflowService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        // Empty annotation file means no objects detected (null frame)
-        let annotationFile: [String: Any] = [:]
-        let annotation: [String: Any] = [
-            "annotationFile": annotationFile
+        // Body matches Python SDK: {"annotationFile": "<COCO JSON>", "labelmap": {}}
+        let payload: [String: Any] = [
+            "annotationFile": cocoJsonString,
+            "labelmap": [:]
         ]
         
-        request.httpBody = try JSONSerialization.data(withJSONObject: annotation)
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         
         let (data, response) = try await URLSession.shared.data(for: request)
         

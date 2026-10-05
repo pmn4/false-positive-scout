@@ -71,8 +71,8 @@ When training object detection models, it's important to include negative exampl
    - Open Scout and tap the **Settings** tab
    - Enter your **Model ID** (for inference)
    - Enter your **API Key**
-   - Enter your **Workspace** name (for upload)
-   - Enter your **Project ID** (for upload)
+   - Enter your **Workspace** name (optional, for future features)
+   - Enter your **Project ID** (required for upload)
    - Adjust **Confidence Threshold** if needed (default: 40%)
 
 ### Usage
@@ -110,9 +110,9 @@ When training object detection models, it's important to include negative exampl
 1. In the Review tab, tap the menu (•••) in the top right
 2. Select **Upload & Nullify**
 3. Tap **Upload & Nullify** to start the bulk upload
-4. Scout uploads kept frames to Roboflow and marks them as null/negative examples
+4. Scout uploads kept frames to Roboflow and automatically marks them as null/negative examples using COCO JSON annotations (same mechanism as the Roboflow CLI/SDK)
 5. Progress is shown with a progress bar
-6. Once complete, frames are ready in your Roboflow project
+6. Once complete, null-annotated frames are ready in your Roboflow project
 7. Generate a new model version and retrain to reduce false positives
 
 ### Example Scenarios

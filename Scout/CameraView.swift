@@ -16,7 +16,7 @@ struct CameraView: View {
     @State private var isRecording = false
     @State private var errorMessage: String?
     @State private var lastCaptureTime: Date?
-    @State private var lastSavedImage: UIImage?
+    @State private var lastSavedHash: Data?
     @State private var captureCount = 0
     
     private let frameCheckInterval: TimeInterval = 0.5
@@ -166,19 +166,19 @@ struct CameraView: View {
     private func stopScanning() {
         isScanning = false
         isRecording = false
-        lastSavedImage = nil
+        lastSavedHash = nil
         cameraManager.stopSession()
     }
     
     private func startRecording() {
         isRecording = true
         lastCaptureTime = nil
-        lastSavedImage = nil
+        lastSavedHash = nil
     }
     
     private func stopRecording() {
         isRecording = false
-        lastSavedImage = nil
+        lastSavedHash = nil
     }
     
     private func scheduleScan() {
@@ -217,15 +217,20 @@ struct CameraView: View {
                 }
                 
                 // Similarity check - skip if too similar to last saved frame
-                if let lastImage = lastSavedImage {
-                    let similarity = imageSimilarity(image1: lastImage, image2: image)
+                if let lastHash = lastSavedHash,
+                   let currentHash = perceptualHash(image: image) {
+                    let hammingDist = hammingDistance(lastHash, currentHash)
+                    let maxDistance = Double(lastHash.count * 8)
+                    let similarity = 1.0 - (Double(hammingDist) / maxDistance)
                     if similarity > similarityThreshold {
                         return
                     }
+                    lastSavedHash = currentHash
+                } else {
+                    lastSavedHash = perceptualHash(image: image)
                 }
                 
                 lastCaptureTime = now
-                lastSavedImage = image
                 
                 // Save frame
                 let imageData = image.jpegData(compressionQuality: 0.8)
@@ -248,20 +253,8 @@ struct CameraView: View {
         }
     }
     
-    // Image similarity using perceptual hash comparison
     // "It ain't where you from, it's where you at" ~Nas (probably)
-    // Returns similarity score 0.0 (different) to 1.0 (identical)
-    private func imageSimilarity(image1: UIImage, image2: UIImage) -> Double {
-        guard let hash1 = perceptualHash(image: image1),
-              let hash2 = perceptualHash(image: image2) else {
-            return 0.0
-        }
-        
-        let hammingDistance = hammingDistance(hash1, hash2)
-        let maxDistance = Double(hash1.count * 8)
-        return 1.0 - (Double(hammingDistance) / maxDistance)
-    }
-    
+    // Perceptual hash for image similarity
     private func perceptualHash(image: UIImage, hashSize: Int = 8) -> Data? {
         guard let resized = resizeImage(image: image, size: CGSize(width: hashSize, height: hashSize)),
               let cgImage = resized.cgImage else {

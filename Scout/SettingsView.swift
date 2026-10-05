@@ -101,7 +101,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Upload Configuration")
                 } footer: {
-                    Text("Required for bulk upload & nullify. Find these in your Roboflow project URL.")
+                    Text("Project ID required for bulk upload & nullify. Workspace is optional (kept for future features).")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

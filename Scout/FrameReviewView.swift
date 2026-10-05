@@ -281,7 +281,6 @@ struct ExportSheet: View {
     let frames: [CapturedFrame]
     @Environment(\.dismiss) var dismiss
     @AppStorage("scout_api_key") private var apiKey: String = ""
-    @AppStorage("scout_workspace") private var workspace: String = ""
     @AppStorage("scout_project") private var project: String = ""
     
     @State private var isUploading = false
@@ -364,8 +363,8 @@ struct ExportSheet: View {
                             .padding(.horizontal)
                     }
                     
-                    if workspace.isEmpty || project.isEmpty {
-                        Text("⚠️ Configure Workspace and Project ID in Settings")
+                    if project.isEmpty {
+                        Text("⚠️ Configure Project ID in Settings")
                             .font(.caption)
                             .foregroundColor(.orange)
                             .multilineTextAlignment(.center)
@@ -379,10 +378,10 @@ struct ExportSheet: View {
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(isUploading || workspace.isEmpty || project.isEmpty ? Color.gray : Color.blue)
+                            .background(isUploading || project.isEmpty ? Color.gray : Color.blue)
                             .cornerRadius(12)
                     }
-                    .disabled(isUploading || workspace.isEmpty || project.isEmpty)
+                    .disabled(isUploading || project.isEmpty)
                     .padding(.horizontal)
                 }
                 
@@ -403,7 +402,7 @@ struct ExportSheet: View {
     }
     
     private func uploadFrames() {
-        guard !workspace.isEmpty, !project.isEmpty, !apiKey.isEmpty else {
+        guard !project.isEmpty, !apiKey.isEmpty else {
             errorMessage = "Missing configuration"
             return
         }
@@ -437,7 +436,6 @@ struct ExportSheet: View {
                     _ = try await RoboflowService.shared.uploadAndNullify(
                         image: image,
                         imageName: imageName,
-                        workspace: workspace,
                         project: project,
                         apiKey: apiKey
                     )
