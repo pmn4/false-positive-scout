@@ -35,7 +35,7 @@ When training object detection models, it's important to include negative exampl
 - iOS 16.0 or later
 - iPhone (optimized for iPhone)
 - A Roboflow account with an object detection model
-- Camera and Photos permissions
+- Camera permission
 
 ## Getting Started
 
@@ -112,8 +112,20 @@ When training object detection models, it's important to include negative exampl
 3. Tap **Upload & Nullify** to start the bulk upload
 4. Scout uploads kept frames to Roboflow and automatically marks them as null/negative examples using COCO JSON annotations (same mechanism as the Roboflow CLI/SDK)
 5. Progress is shown with a progress bar
-6. Once complete, null-annotated frames are ready in your Roboflow project
-7. Generate a new model version and retrain to reduce false positives
+6. Completion screen shows:
+   - **Full success**: Frames uploaded and marked as null (removed from review list)
+   - **Partial success**: Frames uploaded but nullify failed (can retry)
+   - **Failure**: Upload failed entirely
+7. For partial successes, tap **Retry Nullify** to mark uploaded images as null (no re-upload)
+8. Frames that succeed are automatically removed from your review list
+9. Generate a new model version and retrain to reduce false positives
+
+**Upload vs Nullify Failures:**
+- **Upload failure**: Image never reached Roboflow (full failure, can retry full upload)
+- **Nullify failure**: Image is in Roboflow but not marked as null (partial success)
+  - Retry from the app with **Retry Nullify** (only marks as null, doesn't re-upload)
+  - Or mark as Null manually in the Roboflow UI (∅ button in Annotate)
+- Successfully uploaded+nullified frames are removed from review to prevent duplicate uploads
 
 ### Example Scenarios
 
@@ -143,10 +155,10 @@ When training object detection models, it's important to include negative exampl
 ## Privacy & Security
 
 - **Local First:** All frame data is stored on your device
-- **No Backend:** Scout doesn't store or transmit your images to any server except Roboflow's API for inference
+- **No Backend:** Scout doesn't store or transmit your images to any server except Roboflow's API
 - **API Key Protection:** API keys are stored only in iOS app storage (UserDefaults) and never logged or exposed
 - **Camera Permission:** Required for frame capture; you control when scanning is active
-- **Photos Permission:** Required only when exporting frames to your Photos library
+- **Direct Upload:** Frames are uploaded directly to your Roboflow project (no Photos export)
 - **Generic Scenes:** Scout is designed for object detection on generic scenes—avoid filming people or sensitive content
 
 ## Project Structure

@@ -78,34 +78,6 @@ class RoboflowService {
         return inferenceResponse.predictions
     }
     
-    // Upload image and annotate as null (following Roboflow CLI/SDK pattern)
-    func uploadAndNullify(
-        image: UIImage,
-        imageName: String,
-        project: String,
-        apiKey: String
-    ) async throws -> String {
-        // Upload image
-        let imageId = try await uploadImage(
-            image: image,
-            imageName: imageName,
-            project: project,
-            apiKey: apiKey
-        )
-        
-        // Annotate as null using COCO JSON format
-        try await annotateAsNull(
-            imageId: imageId,
-            imageName: imageName,
-            imageWidth: Int(image.size.width),
-            imageHeight: Int(image.size.height),
-            project: project,
-            apiKey: apiKey
-        )
-        
-        return imageId
-    }
-    
     // Upload image to Roboflow project
     func uploadImage(
         image: UIImage,
@@ -209,10 +181,31 @@ class RoboflowService {
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw RoboflowError.invalidResponse
+        }
+        
+        // Mirror Roboflow SDK: 409 "already annotated" is soft success
+        if httpResponse.statusCode == 409 {
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let error = json["error"] as? [String: Any],
+               let message = error["message"] as? String,
+               message.contains("already annotated") {
+                return // Soft success
+            }
+        }
+        
+        guard httpResponse.statusCode == 200 else {
             let errorMessage = String(data: data, encoding: .utf8) ?? "Annotation failed"
             throw RoboflowError.annotationFailed(message: errorMessage)
+        }
+        
+        // Optionally check success in JSON body for 200
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let success = json["success"] as? Bool, !success {
+                let errorMessage = json["error"] as? String ?? "Annotation failed"
+                throw RoboflowError.annotationFailed(message: errorMessage)
+            }
         }
     }
 }

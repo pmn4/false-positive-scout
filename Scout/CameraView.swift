@@ -211,6 +211,9 @@ struct CameraView: View {
                 let currentHash = perceptualHash(image: image)
                 
                 await MainActor.run {
+                    // Re-check isRecording after in-flight detect to prevent save after release
+                    guard isRecording else { return }
+                    
                     // Basic debounce
                     if let lastCapture = lastCaptureTime {
                         guard now.timeIntervalSince(lastCapture) >= frameCheckInterval else {

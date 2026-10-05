@@ -436,7 +436,7 @@ struct ExportSheet: View {
                     Button(uploadComplete ? "Done" : "Cancel") {
                         dismiss()
                     }
-                    .disabled(isUploading)
+                    .disabled(isUploading || isRetrying)
                 }
             }
         }
@@ -494,9 +494,10 @@ struct ExportSheet: View {
                             apiKey: apiKey
                         )
                         
-                        // Full success
+                        // Full success - remove from review list
                         await MainActor.run {
                             successCount += 1
+                            frameStorage.deleteFrame(frame)
                         }
                     } catch {
                         // Upload succeeded but nullify failed - partial success
@@ -552,6 +553,13 @@ struct ExportSheet: View {
                     )
                     
                     retrySuccesses += 1
+                    
+                    // Remove from review list on full success
+                    await MainActor.run {
+                        if let frame = frameStorage.frames.first(where: { $0.id == partial.frameId }) {
+                            frameStorage.deleteFrame(frame)
+                        }
+                    }
                 } catch {
                     remainingFailures.append(partial)
                     await MainActor.run {
