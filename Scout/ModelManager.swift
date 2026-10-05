@@ -56,24 +56,35 @@ class ModelManager: ObservableObject {
             throw ModelError.listFailed
         }
         
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let projectDict = json["project"] as? [String: Any],
-           let versions = projectDict["versions"] as? [[String: Any]] {
-            
-            let models = versions.compactMap { versionDict -> ModelVersion? in
-                // Version ID from API (just the number)
-                guard let id = versionDict["id"] as? String else { return nil }
-                let name = versionDict["name"] as? String ?? "Version \(id)"
-                let created = versionDict["created"] as? String
-                // Store just the version number as ID
-                return ModelVersion(id: id, name: name, created: created)
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            // GET /{workspace}/{project} returns versions at TOP level (not project.versions)
+            var versionsArray: [[String: Any]]?
+            if let topLevelVersions = json["versions"] as? [[String: Any]] {
+                versionsArray = topLevelVersions
+            } else if let projectDict = json["project"] as? [String: Any],
+                      let projectVersions = projectDict["versions"] as? [[String: Any]] {
+                versionsArray = projectVersions
             }
             
-            DispatchQueue.main.async {
-                self.availableModels = models
+            if let versions = versionsArray {
+                let models = versions.compactMap { versionDict -> ModelVersion? in
+                    // Version ID from API (just the number)
+                    guard let id = versionDict["id"] as? String else { return nil }
+                    // Skip versions without a model key (untrained)
+                    guard versionDict["model"] != nil else { return nil }
+                    let name = versionDict["name"] as? String ?? "Version \(id)"
+                    // created may be numeric or string
+                    let created = (versionDict["created"] as? String) ?? (versionDict["created"] as? NSNumber).map { "\($0)" }
+                    // Store just the version number as ID
+                    return ModelVersion(id: id, name: name, created: created)
+                }
+                
+                DispatchQueue.main.async {
+                    self.availableModels = models
+                }
+                
+                return models
             }
-            
-            return models
         }
         
         return []
@@ -325,8 +336,8 @@ class ModelManager: ObservableObject {
                 score = min(Double(observation.confidence) * Double(topLabel.confidence), 1.0)
             }
             
-            // Skip zeroed NMS rows and low confidence
-            guard score >= Double(confidenceThreshold) else { return nil }
+            // Skip zeroed NMS rows and low confidence (score > 0 prevents 0% threshold from passing zeroed rows)
+            guard score > 0, score >= Double(confidenceThreshold) else { return nil }
             
             let boundingBox = observation.boundingBox
             let imageWidth = Double(image.size.width)

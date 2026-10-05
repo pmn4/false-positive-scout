@@ -52,6 +52,8 @@ class OAuthManager: NSObject, ObservableObject {
     
     // Shared refresh task to prevent concurrent refreshes
     private var refreshTask: Task<Void, Error>?
+    private let refreshLock = NSLock()
+    private var sessionGeneration = 0  // Invalidate in-flight refresh on signOut
     
     override private init() {
         super.init()
@@ -140,6 +142,13 @@ class OAuthManager: NSObject, ObservableObject {
     }
     
     func signOut() {
+        // Invalidate in-flight refresh task and bump session generation
+        refreshLock.lock()
+        sessionGeneration += 1
+        refreshTask?.cancel()
+        refreshTask = nil
+        refreshLock.unlock()
+        
         // Clear tokens from keychain
         deleteFromKeychain(key: accessTokenKey)
         deleteFromKeychain(key: refreshTokenKey)
@@ -279,12 +288,23 @@ class OAuthManager: NSObject, ObservableObject {
     private func refreshAccessToken() async throws {
         // Serialize refresh: share one in-flight Task for concurrent waiters
         // Prevents dual refresh from rotating refresh token then 400/401 signOut
+        refreshLock.lock()
         if let existingTask = refreshTask {
+            refreshLock.unlock()
             return try await existingTask.value
         }
         
+        let expectedGeneration = sessionGeneration
+        
         let task = Task<Void, Error> {
-            defer { refreshTask = nil }
+            defer {
+                refreshLock.lock()
+                // Clear refreshTask only if still this one (UUID check would be cleaner)
+                if refreshTask?.isCancelled == false || refreshTask != nil {
+                    refreshTask = nil
+                }
+                refreshLock.unlock()
+            }
             
             guard let refreshToken = getFromKeychain(key: refreshTokenKey) else {
                 throw OAuthError.noRefreshToken
@@ -321,6 +341,16 @@ class OAuthManager: NSObject, ObservableObject {
             let decoder = JSONDecoder()
             let tokenResponse = try decoder.decode(TokenResponse.self, from: data)
             
+            // Check session generation before saving tokens (signOut invalidates)
+            refreshLock.lock()
+            let currentGen = sessionGeneration
+            refreshLock.unlock()
+            
+            guard currentGen == expectedGeneration else {
+                // User signed out during refresh; discard tokens
+                return
+            }
+            
             // Update tokens
             saveToKeychain(key: accessTokenKey, value: tokenResponse.access_token)
             if let newRefreshToken = tokenResponse.refresh_token {
@@ -332,6 +362,7 @@ class OAuthManager: NSObject, ObservableObject {
         }
         
         refreshTask = task
+        refreshLock.unlock()
         try await task.value
     }
     

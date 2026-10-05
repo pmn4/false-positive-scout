@@ -590,8 +590,20 @@ struct SettingsView: View {
                     self.isLoadingVersions = false
                     
                     if !versions.isEmpty && modelVersion.isEmpty {
-                        // Roboflow lists newest-first, use .first (newest) not .last (oldest)
-                        self.modelVersion = versions.first?.id ?? ""
+                        // Auto-select highest version number or latest created (not array position)
+                        let selected = versions.max { a, b in
+                            // Try numeric comparison of version numbers (id is just the number)
+                            if let aNum = Int(a.id), let bNum = Int(b.id) {
+                                return aNum < bNum
+                            }
+                            // Fallback: compare created timestamps (numeric or ISO string)
+                            if let aCreated = a.created, let bCreated = b.created {
+                                return aCreated < bCreated
+                            }
+                            // Default: keep first
+                            return false
+                        }
+                        self.modelVersion = selected?.id ?? versions.first?.id ?? ""
                     }
                 }
             } catch {
