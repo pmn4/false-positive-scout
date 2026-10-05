@@ -592,8 +592,10 @@ struct SettingsView: View {
                     if !versions.isEmpty && modelVersion.isEmpty {
                         // Auto-select highest version number or latest created (not array position)
                         let selected = versions.max { a, b in
-                            // Try numeric comparison of version numbers (id is just the number)
-                            if let aNum = Int(a.id), let bNum = Int(b.id) {
+                            // Try numeric comparison of version numbers (id may be "workspace/project/N")
+                            let aLastComponent = a.id.split(separator: "/").last.map(String.init) ?? a.id
+                            let bLastComponent = b.id.split(separator: "/").last.map(String.init) ?? b.id
+                            if let aNum = Int(aLastComponent), let bNum = Int(bLastComponent) {
                                 return aNum < bNum
                             }
                             // Fallback: compare created timestamps (numeric or ISO string)

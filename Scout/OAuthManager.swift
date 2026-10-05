@@ -52,6 +52,7 @@ class OAuthManager: NSObject, ObservableObject {
     
     // Shared refresh task to prevent concurrent refreshes
     private var refreshTask: Task<Void, Error>?
+    private var refreshTaskId: UUID?  // Identity token to clear only same task
     private let refreshLock = NSLock()
     private var sessionGeneration = 0  // Invalidate in-flight refresh on signOut
     
@@ -147,6 +148,7 @@ class OAuthManager: NSObject, ObservableObject {
         sessionGeneration += 1
         refreshTask?.cancel()
         refreshTask = nil
+        refreshTaskId = nil
         refreshLock.unlock()
         
         // Clear tokens from keychain
@@ -295,13 +297,15 @@ class OAuthManager: NSObject, ObservableObject {
         }
         
         let expectedGeneration = sessionGeneration
+        let taskId = UUID()
         
         let task = Task<Void, Error> {
             defer {
                 refreshLock.lock()
-                // Clear refreshTask only if still this one (UUID check would be cleaner)
-                if refreshTask?.isCancelled == false || refreshTask != nil {
+                // Clear refreshTask only if still this one (identity check)
+                if refreshTaskId == taskId {
                     refreshTask = nil
+                    refreshTaskId = nil
                 }
                 refreshLock.unlock()
             }
@@ -331,9 +335,18 @@ class OAuthManager: NSObject, ObservableObject {
             guard httpResponse.statusCode == 200 else {
                 // Only sign out on 400/401 (invalid_grant / expired refresh token)
                 // Keep tokens for temporary errors (5xx, 429) and let user retry
-                let shouldSignOut = httpResponse.statusCode == 400 || httpResponse.statusCode == 401
+                // But only if this task's session is still current (no signOut+signIn since start)
+                refreshLock.lock()
+                let currentGen = sessionGeneration
+                refreshLock.unlock()
+                
+                let shouldSignOut = (httpResponse.statusCode == 400 || httpResponse.statusCode == 401) && currentGen == expectedGeneration
                 if shouldSignOut {
                     signOut()
+                }
+                // If generation changed, this task is stale; throw cancellation
+                if currentGen != expectedGeneration {
+                    throw CancellationError()
                 }
                 throw OAuthError.refreshFailed(signedOut: shouldSignOut)
             }
@@ -342,16 +355,16 @@ class OAuthManager: NSObject, ObservableObject {
             let tokenResponse = try decoder.decode(TokenResponse.self, from: data)
             
             // Check session generation before saving tokens (signOut invalidates)
+            // Hold lock across check + save to prevent signOut race
             refreshLock.lock()
-            let currentGen = sessionGeneration
-            refreshLock.unlock()
+            defer { refreshLock.unlock() }
             
-            guard currentGen == expectedGeneration else {
+            guard sessionGeneration == expectedGeneration else {
                 // User signed out during refresh; discard tokens
                 return
             }
             
-            // Update tokens
+            // Update tokens (under lock to prevent signOut delete after gen check)
             saveToKeychain(key: accessTokenKey, value: tokenResponse.access_token)
             if let newRefreshToken = tokenResponse.refresh_token {
                 saveToKeychain(key: refreshTokenKey, value: newRefreshToken)
@@ -362,6 +375,7 @@ class OAuthManager: NSObject, ObservableObject {
         }
         
         refreshTask = task
+        refreshTaskId = taskId
         refreshLock.unlock()
         try await task.value
     }
