@@ -107,7 +107,7 @@ class RoboflowService {
     }
     
     // Upload image to Roboflow project
-    private func uploadImage(
+    func uploadImage(
         image: UIImage,
         imageName: String,
         project: String,
@@ -157,7 +157,7 @@ class RoboflowService {
     
     // Annotate image as null using COCO JSON format
     // Matches Roboflow CLI/SDK mechanism for marking null/negative examples
-    private func annotateAsNull(
+    func annotateAsNull(
         imageId: String,
         imageName: String,
         imageWidth: Int,

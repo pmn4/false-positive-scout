@@ -283,30 +283,71 @@ struct ExportSheet: View {
     @AppStorage("scout_api_key") private var apiKey: String = ""
     @AppStorage("scout_project") private var project: String = ""
     
+    // "Half real, half incredible, like a myth that's legible" ~Nas (probably)
+    // Track upload state for retry
+    struct PartialSuccess: Identifiable {
+        let id = UUID()
+        let frameId: UUID
+        let imageId: String
+        let imageName: String
+        let image: UIImage
+    }
+    
     @State private var isUploading = false
     @State private var uploadProgress: UploadProgress?
     @State private var errorMessage: String?
     @State private var uploadComplete = false
     @State private var successCount = 0
     @State private var failureCount = 0
+    @State private var partialSuccesses: [PartialSuccess] = []
+    @State private var isRetrying = false
     
     var body: some View {
         NavigationView {
             VStack(spacing: 20) {
                 if uploadComplete {
-                    Image(systemName: failureCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    Image(systemName: failureCount == 0 && partialSuccesses.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                         .font(.system(size: 60))
-                        .foregroundColor(failureCount == 0 ? .green : .orange)
+                        .foregroundColor(failureCount == 0 && partialSuccesses.isEmpty ? .green : .orange)
                     
-                    Text(failureCount == 0 ? "Upload Complete!" : "Upload Finished with Errors")
+                    Text(failureCount == 0 && partialSuccesses.isEmpty ? "Upload Complete!" : "Upload Finished")
                         .font(.title2)
                         .fontWeight(.bold)
                     
-                    VStack(spacing: 8) {
+                    VStack(spacing: 12) {
                         if successCount > 0 {
-                            Text("✓ \(successCount) frame\(successCount != 1 ? "s" : "") uploaded and marked as null")
+                            Text("✓ \(successCount) frame\(successCount != 1 ? "s" : "") uploaded & marked as null")
                                 .font(.subheadline)
                                 .foregroundColor(.green)
+                        }
+                        
+                        if !partialSuccesses.isEmpty {
+                            VStack(spacing: 8) {
+                                Text("⚠️ \(partialSuccesses.count) frame\(partialSuccesses.count != 1 ? "s" : "") uploaded but nullify failed")
+                                    .font(.subheadline)
+                                    .foregroundColor(.orange)
+                                
+                                Text("Images are in Roboflow but not marked as null. You can mark them as Null in the Roboflow UI, or retry below.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                
+                                Button(action: {
+                                    retryNullify()
+                                }) {
+                                    Text(isRetrying ? "Retrying..." : "Retry Nullify")
+                                        .font(.subheadline)
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 20)
+                                        .padding(.vertical, 8)
+                                        .background(Color.orange)
+                                        .cornerRadius(8)
+                                }
+                                .disabled(isRetrying)
+                            }
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
+                            .background(Color.orange.opacity(0.1))
+                            .cornerRadius(12)
                         }
                         
                         if failureCount > 0 {
@@ -315,7 +356,7 @@ struct ExportSheet: View {
                                 .foregroundColor(.red)
                         }
                         
-                        if let error = errorMessage, failureCount > 0 {
+                        if let error = errorMessage, (failureCount > 0 || !partialSuccesses.isEmpty) {
                             Text("Last error: \(error)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -411,6 +452,7 @@ struct ExportSheet: View {
         errorMessage = nil
         successCount = 0
         failureCount = 0
+        partialSuccesses = []
         
         Task {
             for (index, frame) in frames.enumerated() {
@@ -433,17 +475,43 @@ struct ExportSheet: View {
                 }
                 
                 do {
-                    _ = try await RoboflowService.shared.uploadAndNullify(
+                    // Upload image first
+                    let imageId = try await RoboflowService.shared.uploadImage(
                         image: image,
                         imageName: imageName,
                         project: project,
                         apiKey: apiKey
                     )
                     
-                    await MainActor.run {
-                        successCount += 1
+                    // Try to nullify
+                    do {
+                        try await RoboflowService.shared.annotateAsNull(
+                            imageId: imageId,
+                            imageName: imageName,
+                            imageWidth: Int(image.size.width),
+                            imageHeight: Int(image.size.height),
+                            project: project,
+                            apiKey: apiKey
+                        )
+                        
+                        // Full success
+                        await MainActor.run {
+                            successCount += 1
+                        }
+                    } catch {
+                        // Upload succeeded but nullify failed - partial success
+                        await MainActor.run {
+                            partialSuccesses.append(PartialSuccess(
+                                frameId: frame.id,
+                                imageId: imageId,
+                                imageName: imageName,
+                                image: image
+                            ))
+                            errorMessage = error.localizedDescription
+                        }
                     }
                 } catch {
+                    // Upload failed - full failure
                     await MainActor.run {
                         failureCount += 1
                         errorMessage = error.localizedDescription
@@ -456,6 +524,48 @@ struct ExportSheet: View {
             await MainActor.run {
                 isUploading = false
                 uploadComplete = true
+            }
+        }
+    }
+    
+    private func retryNullify() {
+        guard !partialSuccesses.isEmpty else { return }
+        
+        isRetrying = true
+        errorMessage = nil
+        
+        let toRetry = partialSuccesses
+        
+        Task {
+            var remainingFailures: [PartialSuccess] = []
+            var retrySuccesses = 0
+            
+            for partial in toRetry {
+                do {
+                    try await RoboflowService.shared.annotateAsNull(
+                        imageId: partial.imageId,
+                        imageName: partial.imageName,
+                        imageWidth: Int(partial.image.size.width),
+                        imageHeight: Int(partial.image.size.height),
+                        project: project,
+                        apiKey: apiKey
+                    )
+                    
+                    retrySuccesses += 1
+                } catch {
+                    remainingFailures.append(partial)
+                    await MainActor.run {
+                        errorMessage = error.localizedDescription
+                    }
+                }
+                
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            
+            await MainActor.run {
+                successCount += retrySuccesses
+                partialSuccesses = remainingFailures
+                isRetrying = false
             }
         }
     }
