@@ -104,7 +104,8 @@ class RoboflowService {
         image: UIImage,
         imageName: String,
         project: String,
-        tag: String? = defaultUploadTag
+        tag: String? = defaultUploadTag,
+        batchName: String? = nil
     ) async throws -> String {
         let accessToken = try await OAuthManager.shared.getAccessToken()
         
@@ -114,12 +115,18 @@ class RoboflowService {
         
         let base64String = imageData.base64EncodedString()
         
-        // Upload using Bearer token
+        // Upload using Bearer token, with optional batch grouping
         var components = URLComponents(string: "https://api.roboflow.com/dataset/\(project)/upload")!
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "name", value: imageName),
             URLQueryItem(name: "split", value: "train")
         ]
+        
+        if let batchName = batchName, !batchName.isEmpty {
+            queryItems.append(URLQueryItem(name: "batch", value: batchName))
+        }
+        
+        components.queryItems = queryItems
         
         guard let uploadURL = components.url else {
             throw RoboflowError.invalidURL

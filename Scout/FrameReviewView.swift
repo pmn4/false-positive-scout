@@ -300,6 +300,13 @@ struct ExportSheet: View {
     @State private var partialSuccesses: [PartialSuccess] = []
     @State private var isRetrying = false
     
+    // Generate session-based batch name for grouping uploads
+    private var batchName: String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return "Scout - \(dateFormatter.string(from: Date()))"
+    }
+    
     var body: some View {
         NavigationView {
             VStack(spacing: 20) {
@@ -504,11 +511,13 @@ struct ExportSheet: View {
                 } else {
                     // Not yet uploaded - do full upload + nullify
                     do {
-                        // Upload image first
+                        // Upload image first (with batch grouping)
                         let imageId = try await RoboflowService.shared.uploadImage(
                             image: image,
                             imageName: imageName,
-                            project: project
+                            project: project,
+                            tag: RoboflowService.defaultUploadTag,
+                            batchName: batchName
                         )
                         
                         // Mark as uploaded

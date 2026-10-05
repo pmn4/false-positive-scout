@@ -30,6 +30,7 @@ When training object detection models, it's important to include negative exampl
 - ☁️ **Bulk Upload** – Upload kept frames directly to Roboflow with progress tracking
 - 🏷️ **Auto-Tagging** – Tags uploads with "scout" for easy filtering
 - 🏷️ **Auto-Nullify** – Automatically marks uploaded frames as null/negative examples
+- 📦 **Batch Grouping** – Groups uploads into annotation batches with session timestamp
 - 📥 **Model Caching** – Downloads models once, runs fully offline afterward
 - ⚙️ **Configurable Threshold** – Adjust confidence levels for capture sensitivity
 
@@ -62,9 +63,45 @@ When training object detection models, it's important to include negative exampl
 
 ### Configuration
 
-#### 1. Register a Roboflow OAuth App
+#### 1. Set Up Universal Links for OAuth Redirect
 
-Scout uses **Sign in with Roboflow** (OAuth 2.1 with PKCE) for secure authentication and on-device model deployment.
+Scout uses **https://** redirect URIs via iOS Universal Links (required by Roboflow OAuth).
+
+**Option A: Use the provided GitHub Pages URL (recommended for testing):**
+- Redirect URI: `https://pmn4.github.io/false-positive-scout/oauth/callback`
+- The `apple-app-site-association` file is already hosted in this repository
+- Skip to step 2 (no hosting setup needed)
+
+**Option B: Use your own domain (for production):**
+1. **Host the apple-app-site-association file:**
+   - Copy `apple-app-site-association` from this repository
+   - Replace `TEAM_ID` with your Apple Developer Team ID
+   - Host it at `https://yourdomain.com/.well-known/apple-app-site-association`
+   - OR at `https://yourdomain.com/apple-app-site-association` (root fallback)
+   - Must be served with `Content-Type: application/json` or `application/pkcs7-mime`
+   - Must be accessible over HTTPS (certificate valid, no redirects)
+
+2. **Update the redirect URI in code:**
+   - Open `Scout/OAuthManager.swift`
+   - Update `redirectURI` to your domain + path (e.g., `https://yourdomain.com/oauth/callback`)
+   - Ensure the path matches what's in your `apple-app-site-association` file
+
+#### 2. Configure Associated Domains in Xcode
+
+1. **Open the project in Xcode:**
+   ```bash
+   open Scout.xcodeproj
+   ```
+
+2. **Add Associated Domains capability:**
+   - Select the **Scout** target
+   - Go to **Signing & Capabilities** tab
+   - Click **+ Capability**
+   - Add **Associated Domains**
+   - Add domain: `applinks:pmn4.github.io` (or `applinks:yourdomain.com` if using your own)
+   - Do NOT include `https://` or paths in the Associated Domains entry
+
+#### 3. Register a Roboflow OAuth App
 
 1. **Open Roboflow Developer Settings:**
    - Log in to [Roboflow](https://app.roboflow.com)
@@ -75,7 +112,9 @@ Scout uses **Sign in with Roboflow** (OAuth 2.1 with PKCE) for secure authentica
    - Fill in the following:
      - **Name**: `Scout` (or your preferred name)
      - **Homepage URL**: Your app homepage (e.g., `https://github.com/pmn4/false-positive-scout`)
-     - **Redirect URI**: `com.scout.app://oauth/callback` (exactly as shown)
+     - **Redirect URI**: `https://pmn4.github.io/false-positive-scout/oauth/callback`
+       - (or your custom domain if using Option B above)
+       - Must exactly match the redirect URI in `OAuthManager.swift`
      - **Token endpoint authentication**: `client_secret_post` (default)
      - **Allowed scopes**: Select the following scopes:
        - `workspace:read` - List workspaces
@@ -85,30 +124,28 @@ Scout uses **Sign in with Roboflow** (OAuth 2.1 with PKCE) for secure authentica
        - `image:read` - Read uploaded images
        - `image:tag` - Tag uploads with "scout"
        - `image:annotate` - Mark images as null examples
+       - `batch:create` - Create annotation batches
+       - `batch:read` - Read batch info
      - **Visibility**: `Internal` (recommended) or `Unlisted`
 
 3. **Copy your Client ID:**
    - After creating the app, copy the **Client ID** (starts with `rfc_...`)
    - You'll paste this into the Scout code in the next step
 
-#### 2. Configure Scout with Your OAuth Client ID
+#### 4. Configure Scout with Your OAuth Client ID
 
-1. **Open the project in Xcode:**
-   ```bash
-   open Scout.xcodeproj
-   ```
-
-2. **Update the OAuth Client ID:**
+1. **Update the OAuth Client ID:**
    - Open `Scout/OAuthManager.swift`
    - Find the line: `private let clientId = "YOUR_ROBOFLOW_OAUTH_CLIENT_ID"`
-   - Replace `YOUR_ROBOFLOW_OAUTH_CLIENT_ID` with your Client ID from step 1
+   - Replace `YOUR_ROBOFLOW_OAUTH_CLIENT_ID` with your Client ID from step 3
+   - Verify `redirectURI` matches your Roboflow OAuth app redirect URI exactly
 
-3. **Sign in and configure Scout:**
+5. **Sign in and configure Scout:**
    - Open Scout and tap the **Settings** tab
    - Tap **Sign in with Roboflow**
    - Authorize Scout to access your workspaces, projects, and models
 
-4. **Download an on-device detection model:**
+6. **Download an on-device detection model:**
    - After sign-in, tap **Load Workspaces & Projects**
    - Under **On-Device Detection Model**:
      - Select the **Workspace** containing your model
@@ -118,11 +155,11 @@ Scout uses **Sign in with Roboflow** (OAuth 2.1 with PKCE) for secure authentica
    - The model downloads once and runs **fully offline** for all future scouting
    - Supports **RF-DETR**, **YoloLite**, and **Classification** models exported to Core ML
 
-5. **Select upload destination:**
+7. **Select upload destination:**
    - Under **Upload Destination**, choose the project where null frames will be uploaded
    - This can be the same project as your detection model, or a different one
 
-6. **Adjust detection threshold (optional):**
+8. **Adjust detection threshold (optional):**
    - Set **Confidence Threshold** (default: 40%)
    - Lower values capture more detections, including weak false positives
 
@@ -212,11 +249,12 @@ Scout uses **Sign in with Roboflow** (OAuth 2.1 with PKCE) for secure authentica
 - **Offline Operation:** After model download, scouting works completely offline
 - **Local First:** All frame data is stored on your device
 - **OAuth Security:** Access tokens stored securely in iOS Keychain; refresh tokens valid for 30 days
-- **Minimal Scopes:** Requests only necessary permissions (workspace/project/version read, image create/read/tag/annotate)
+- **Minimal Scopes:** Requests only necessary permissions (workspace/project/version read, image create/read/tag/annotate, batch create/read)
 - **PKCE Protection:** Uses OAuth 2.1 with PKCE (Proof Key for Code Exchange) for public clients
 - **Camera Permission:** Required for frame capture; you control when scanning is active
 - **Direct Upload:** Frames are uploaded directly to your Roboflow project (no Photos export)
 - **Auto-Tagging:** Uploads tagged with "scout" for easy identification
+- **Batch Grouping:** Groups uploads by session timestamp (e.g., "Scout - 2026-10-05 18:34") for annotation workflow
 - **Generic Scenes:** Scout is designed for object detection on generic scenes—avoid filming people or sensitive content
 
 ## Project Structure
@@ -264,17 +302,32 @@ After configuring your OAuth Client ID:
 
 ### Troubleshooting OAuth
 
-- **"Invalid redirect URI" error:**
-  - Verify the redirect URI in your Roboflow OAuth app exactly matches: `com.scout.app://oauth/callback`
-  - Check that `Info.plist` has `CFBundleURLTypes` with `com.scout.app` URL scheme
+- **"Invalid redirect URI" or "Unsupported scheme" error:**
+  - Roboflow requires `https://` redirect URIs (or `http://` for localhost only)
+  - Verify the redirect URI in your Roboflow OAuth app exactly matches `redirectURI` in `OAuthManager.swift`
+  - If using a custom domain, ensure it starts with `https://`
 
 - **"Invalid client" error:**
   - Double-check the Client ID in `OAuthManager.swift` matches your Roboflow OAuth app
   - Ensure you didn't include extra spaces or quotes
 
 - **Sign-in opens but doesn't return to Scout:**
-  - Verify the bundle ID is `com.scout.app` in Xcode project settings
-  - Check that the URL scheme is registered in `Info.plist`
+  - **Check Associated Domains:**
+    - In Xcode, go to Scout target > Signing & Capabilities > Associated Domains
+    - Verify domain is listed (e.g., `applinks:pmn4.github.io`)
+    - Do NOT include `https://` or paths in Associated Domains
+  - **Verify apple-app-site-association file:**
+    - Visit `https://yourdomain.com/.well-known/apple-app-site-association`
+    - Should return valid JSON (not 404)
+    - Must be served over HTTPS with valid certificate
+    - Check `TEAM_ID` matches your Apple Developer Team ID
+    - Check `paths` array includes your OAuth callback path
+  - **Test Universal Link:**
+    - In Safari on your iPhone, visit your redirect URL
+    - Should prompt to open in Scout (if Associated Domains is configured correctly)
+  - **Rebuild after configuration changes:**
+    - Clean build folder (Cmd+Shift+K)
+    - Rebuild and reinstall the app
 
 - **Token expired / refresh failed:**
   - Access tokens expire after 1 hour; refresh tokens expire after 30 days
@@ -310,14 +363,37 @@ After configuring your OAuth Client ID:
   - Check the confidence threshold (Settings > Detection Settings)
   - Ensure the model was trained on similar object classes and conditions
 
+## Hosting apple-app-site-association on GitHub Pages
+
+If using the default `pmn4.github.io` redirect URI:
+
+1. **Update the TEAM_ID in the file:**
+   - Open `apple-app-site-association` in this repository
+   - Replace `TEAM_ID` with your Apple Developer Team ID
+   - Find your Team ID in Xcode: Scout target > Signing & Capabilities > Team
+
+2. **Deploy to GitHub Pages:**
+   - The file is already in the repository root
+   - Enable GitHub Pages: Repo Settings > Pages > Deploy from branch `main`
+   - GitHub Pages automatically serves files at the root
+   - Verify it's accessible: `https://pmn4.github.io/false-positive-scout/apple-app-site-association`
+
+3. **Alternative: Use .well-known directory (preferred):**
+   - Create `.well-known/` directory in your repository
+   - Move `apple-app-site-association` into `.well-known/`
+   - Verify: `https://pmn4.github.io/false-positive-scout/.well-known/apple-app-site-association`
+
+**Note:** GitHub Pages serves JSON files correctly. If using another host, ensure the Content-Type is `application/json` or `application/pkcs7-mime`.
+
 ## Building for Release
 
 1. Open `Scout.xcodeproj` in Xcode
 2. Select **Any iOS Device** as the build target
 3. Set your development team in Signing & Capabilities
-4. Verify bundle ID is `com.scout.app` (matches OAuth redirect URI)
-5. Archive the app: **Product > Archive**
-6. Distribute via App Store Connect or TestFlight
+4. Add **Associated Domains** capability with your domain (e.g., `applinks:pmn4.github.io`)
+5. Verify bundle ID is `com.scout.app`
+6. Archive the app: **Product > Archive**
+7. Distribute via App Store Connect or TestFlight
 
 ## Contributing
 

@@ -18,8 +18,10 @@ class OAuthManager: NSObject, ObservableObject {
     // Client ID placeholder - Patrick will paste from Roboflow OAuth app
     private let clientId = "YOUR_ROBOFLOW_OAUTH_CLIENT_ID"
     
-    // Redirect URI (matches Bundle ID URL scheme in Info.plist CFBundleURLTypes)
-    private let redirectURI = "com.scout.app://oauth/callback"
+    // Redirect URI (https:// for Universal Links / Associated Domains)
+    // Roboflow requires https:// (or http:// for localhost only)
+    // Patrick can use this GitHub Pages URL or register his own domain
+    private let redirectURI = "https://pmn4.github.io/false-positive-scout/oauth/callback"
     
     // Required OAuth scopes for Scout's functionality
     private let scopes = [
@@ -29,8 +31,11 @@ class OAuthManager: NSObject, ObservableObject {
         "image:create",     // Upload images
         "image:read",       // Read uploaded images
         "image:tag",        // Tag uploads (e.g. "scout")
-        "image:annotate"    // Annotate as null
-        // "folder:read"    // Optional: project folder tree (pending confirmation)
+        "image:annotate",   // Annotate as null
+        "batch:create",     // Create annotation batches (groups uploaded images)
+        "batch:read"        // Read batch info
+        // "batch:admin-read"  // Optional: read Annotation Board batches (pending confirmation)
+        // "folder:read"       // Optional: project folder tree (pending confirmation)
     ]
     
     // Keychain keys
@@ -78,7 +83,7 @@ class OAuthManager: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 self.authSession = ASWebAuthenticationSession(
                     url: authURL,
-                    callbackURLScheme: "com.scout.app"
+                    callbackURLScheme: "https"
                 ) { callbackURL, error in
                     if let error = error {
                         continuation.resume(throwing: OAuthError.authorizationFailed(error.localizedDescription))
