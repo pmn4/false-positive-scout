@@ -502,12 +502,12 @@ struct SettingsView: View {
                     // Restore selectedWorkspace from AppStorage (modelWorkspace) if available
                     if !modelWorkspace.isEmpty,
                        let saved = loadedWorkspaces.first(where: { $0.url == modelWorkspace }) {
+                        self.previousWorkspace = saved  // Set previous BEFORE selected to avoid onChange double-fetch
                         self.selectedWorkspace = saved
-                        self.previousWorkspace = saved  // Set previous to avoid clearing on first switch
                         loadProjects(workspace: saved.url)
                     } else if let first = loadedWorkspaces.first {
+                        self.previousWorkspace = first  // Set previous BEFORE selected to avoid onChange double-fetch
                         self.selectedWorkspace = first
-                        self.previousWorkspace = first  // Set previous to avoid clearing on first switch
                         loadProjects(workspace: first.url)
                     }
                 }

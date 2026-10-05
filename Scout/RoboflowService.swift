@@ -79,14 +79,35 @@ class RoboflowService {
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw RoboflowError.apiError(statusCode: 0, message: "Failed to fetch workspaces")
         }
         
+        guard httpResponse.statusCode == 200 else {
+            throw RoboflowError.apiError(statusCode: httpResponse.statusCode, message: "Failed to fetch workspaces")
+        }
+        
         let decoder = JSONDecoder()
-        let workspaceResponse = try decoder.decode([String: [Workspace]].self, from: data)
-        return workspaceResponse["workspaces"] ?? []
+        
+        // SIWR/docs return {"workspace":"slug",...}, not {"workspaces":[...]}
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            // Try single workspace string (SIWR response)
+            if let workspaceSlug = json["workspace"] as? String {
+                return [Workspace(url: workspaceSlug, name: workspaceSlug, members: 1)]
+            }
+            // Try array format (if it exists)
+            if let workspacesArray = json["workspaces"] as? [[String: Any]] {
+                let workspaces = workspacesArray.compactMap { dict -> Workspace? in
+                    guard let url = dict["url"] as? String else { return nil }
+                    let name = dict["name"] as? String ?? url
+                    let members = dict["members"] as? Int ?? 1
+                    return Workspace(url: url, name: name, members: members)
+                }
+                return workspaces
+            }
+        }
+        
+        return []
     }
     
     // List all projects in a workspace
@@ -110,9 +131,12 @@ class RoboflowService {
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw RoboflowError.apiError(statusCode: 0, message: "Failed to fetch projects")
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            throw RoboflowError.apiError(statusCode: httpResponse.statusCode, message: "Failed to fetch projects")
         }
         
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

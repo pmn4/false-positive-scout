@@ -360,8 +360,8 @@ class OAuthManager: NSObject, ObservableObject {
             defer { refreshLock.unlock() }
             
             guard sessionGeneration == expectedGeneration else {
-                // User signed out during refresh; discard tokens
-                return
+                // User signed out during refresh; discard tokens and fail (don't return success)
+                throw CancellationError()
             }
             
             // Update tokens (under lock to prevent signOut delete after gen check)
