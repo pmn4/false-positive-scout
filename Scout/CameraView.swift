@@ -208,39 +208,40 @@ struct CameraView: View {
             // Only save if recording AND detections found AND different from last saved
             if isRecording && !detections.isEmpty {
                 let now = Date()
-                
-                // Basic debounce
-                if let lastCapture = lastCaptureTime {
-                    guard now.timeIntervalSince(lastCapture) >= frameCheckInterval else {
-                        return
-                    }
-                }
-                
-                // Similarity check - skip if too similar to last saved frame
-                if let lastHash = lastSavedHash,
-                   let currentHash = perceptualHash(image: image) {
-                    let hammingDist = hammingDistance(lastHash, currentHash)
-                    let maxDistance = Double(lastHash.count * 8)
-                    let similarity = 1.0 - (Double(hammingDist) / maxDistance)
-                    if similarity > similarityThreshold {
-                        return
-                    }
-                    lastSavedHash = currentHash
-                } else {
-                    lastSavedHash = perceptualHash(image: image)
-                }
-                
-                lastCaptureTime = now
-                
-                // Save frame
-                let imageData = image.jpegData(compressionQuality: 0.8)
-                let frame = CapturedFrame(
-                    timestamp: now,
-                    detections: detections,
-                    imageData: imageData
-                )
+                let currentHash = perceptualHash(image: image)
                 
                 await MainActor.run {
+                    // Basic debounce
+                    if let lastCapture = lastCaptureTime {
+                        guard now.timeIntervalSince(lastCapture) >= frameCheckInterval else {
+                            return
+                        }
+                    }
+                    
+                    // Similarity check - skip if too similar to last saved frame
+                    if let lastHash = lastSavedHash,
+                       let currentHash = currentHash {
+                        let hammingDist = hammingDistance(lastHash, currentHash)
+                        let maxDistance = Double(lastHash.count * 8)
+                        let similarity = 1.0 - (Double(hammingDist) / maxDistance)
+                        if similarity > similarityThreshold {
+                            return
+                        }
+                        lastSavedHash = currentHash
+                    } else {
+                        lastSavedHash = currentHash
+                    }
+                    
+                    lastCaptureTime = now
+                    
+                    // Save frame
+                    let imageData = image.jpegData(compressionQuality: 0.8)
+                    let frame = CapturedFrame(
+                        timestamp: now,
+                        detections: detections,
+                        imageData: imageData
+                    )
+                    
                     frameStorage.addFrame(frame)
                     captureCount = frameStorage.frames.count
                 }

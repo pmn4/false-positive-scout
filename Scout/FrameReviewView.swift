@@ -363,8 +363,8 @@ struct ExportSheet: View {
                             .padding(.horizontal)
                     }
                     
-                    if project.isEmpty {
-                        Text("⚠️ Configure Project ID in Settings")
+                    if apiKey.isEmpty || project.isEmpty {
+                        Text("⚠️ Configure API Key and Project ID in Settings")
                             .font(.caption)
                             .foregroundColor(.orange)
                             .multilineTextAlignment(.center)
@@ -378,10 +378,10 @@ struct ExportSheet: View {
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(isUploading || project.isEmpty ? Color.gray : Color.blue)
+                            .background(isUploading || apiKey.isEmpty || project.isEmpty ? Color.gray : Color.blue)
                             .cornerRadius(12)
                     }
-                    .disabled(isUploading || project.isEmpty)
+                    .disabled(isUploading || apiKey.isEmpty || project.isEmpty)
                     .padding(.horizontal)
                 }
                 

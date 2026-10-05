@@ -110,7 +110,6 @@ class RoboflowService {
     private func uploadImage(
         image: UIImage,
         imageName: String,
-        workspace: String,
         project: String,
         apiKey: String
     ) async throws -> String {
