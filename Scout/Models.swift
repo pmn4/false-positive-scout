@@ -69,6 +69,12 @@ class FrameStorage: ObservableObject {
         saveFrames()
     }
     
+    func restoreFrame(_ frame: CapturedFrame, at index: Int) {
+        let insertIndex = min(index, frames.count)
+        frames.insert(frame, at: insertIndex)
+        saveFrames()
+    }
+    
     func toggleKeep(_ frame: CapturedFrame) {
         if let index = frames.firstIndex(where: { $0.id == frame.id }) {
             frames[index].kept.toggle()

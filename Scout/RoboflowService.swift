@@ -4,6 +4,19 @@ import UIKit
 // "I never sleep, 'cause sleep is the cousin of death" - Nas (probably)
 // Service for calling Roboflow inference API
 
+// "Upload progress like I'm on a mission" ~Nas (probably)
+// Progress tracking for bulk operations
+struct UploadProgress {
+    var current: Int
+    var total: Int
+    var currentImageName: String
+    
+    var percentage: Double {
+        guard total > 0 else { return 0 }
+        return Double(current) / Double(total)
+    }
+}
+
 class RoboflowService {
     static let shared = RoboflowService()
     
@@ -64,6 +77,115 @@ class RoboflowService {
         
         return inferenceResponse.predictions
     }
+    
+    // Upload image and annotate as null
+    func uploadAndNullify(
+        image: UIImage,
+        imageName: String,
+        workspace: String,
+        project: String,
+        apiKey: String
+    ) async throws -> String {
+        // Upload image
+        let imageId = try await uploadImage(
+            image: image,
+            imageName: imageName,
+            workspace: workspace,
+            project: project,
+            apiKey: apiKey
+        )
+        
+        // Annotate as null (empty annotation)
+        try await annotateAsNull(
+            imageId: imageId,
+            workspace: workspace,
+            project: project,
+            apiKey: apiKey
+        )
+        
+        return imageId
+    }
+    
+    private func uploadImage(
+        image: UIImage,
+        imageName: String,
+        workspace: String,
+        project: String,
+        apiKey: String
+    ) async throws -> String {
+        guard let imageData = image.jpegData(compressionQuality: 0.8) else {
+            throw RoboflowError.imageConversionFailed
+        }
+        
+        let base64String = imageData.base64EncodedString()
+        
+        // Upload to Roboflow
+        let uploadURL = URL(string: "https://api.roboflow.com/dataset/\(project)/upload")!
+        var request = URLRequest(url: uploadURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        let params = [
+            "api_key": apiKey,
+            "name": imageName,
+            "split": "train"
+        ]
+        
+        var bodyComponents = URLComponents()
+        bodyComponents.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
+        
+        if var body = bodyComponents.query {
+            body += "&image=\(base64String)"
+            request.httpBody = body.data(using: .utf8)
+        }
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Upload failed"
+            throw RoboflowError.uploadFailed(message: errorMessage)
+        }
+        
+        // Parse response to get image ID
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let imageId = json["id"] as? String {
+            return imageId
+        }
+        
+        throw RoboflowError.uploadFailed(message: "No image ID returned")
+    }
+    
+    private func annotateAsNull(
+        imageId: String,
+        workspace: String,
+        project: String,
+        apiKey: String
+    ) async throws {
+        // Create empty annotation (null frame)
+        let annotateURL = URL(string: "https://api.roboflow.com/dataset/\(project)/annotate/\(imageId)")!
+        var request = URLRequest(url: annotateURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Empty annotation means no objects detected (null frame)
+        let annotation: [String: Any] = [
+            "api_key": apiKey,
+            "name": imageId,
+            "annotation": [:],
+            "split": "train"
+        ]
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: annotation)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Annotation failed"
+            throw RoboflowError.annotationFailed(message: errorMessage)
+        }
+    }
 }
 
 enum RoboflowError: LocalizedError {
@@ -73,6 +195,8 @@ enum RoboflowError: LocalizedError {
     case invalidURL
     case invalidResponse
     case apiError(statusCode: Int, message: String)
+    case uploadFailed(message: String)
+    case annotationFailed(message: String)
     
     var errorDescription: String? {
         switch self {
@@ -88,6 +212,10 @@ enum RoboflowError: LocalizedError {
             return "Invalid response from server"
         case .apiError(let statusCode, let message):
             return "API Error (\(statusCode)): \(message)"
+        case .uploadFailed(let message):
+            return "Upload failed: \(message)"
+        case .annotationFailed(let message):
+            return "Annotation failed: \(message)"
         }
     }
 }

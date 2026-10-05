@@ -9,20 +9,24 @@ Scout is a native iOS app that helps you collect false-positive frames from your
 When training object detection models, it's important to include negative examples—images where your target objects are absent. Without these, models often develop false positives, detecting objects in backgrounds, textures, or lighting conditions where nothing should be detected.
 
 **Scout automates null frame collection:**
-1. You point your iPhone camera at scenes that should trigger zero detections
+1. Start detection mode and point your iPhone camera at scenes that should trigger zero detections
 2. Scout runs your model continuously in the background
-3. Whenever the model incorrectly detects something (a false positive), Scout saves that frame
-4. You review, keep or discard frames with a fast swipe interface
-5. Export kept frames to your Photos library and upload them to Roboflow as null examples
+3. **Hold the record button** when you see false positives to save frames
+4. Scout automatically deduplicates similar frames while you're recording
+5. Review saved frames with a swipe interface and undo mistakes
+6. Bulk upload kept frames directly to Roboflow and mark them as null examples
 
 ## Features
 
 - 📱 **Native iOS App** – Built with SwiftUI for iPhone
 - 📷 **Front & Back Camera** – Switch between cameras on the fly
-- 🎯 **Smart Debouncing** – Prevents rapid-fire duplicate captures (3-second cooldown)
+- 🎥 **Hold-to-Record** – Only saves frames while you hold the record button
+- 🎯 **Smart Deduplication** – Uses perceptual hashing to skip similar frames
+- ↩️ **Undo Support** – Easily undo accidental deletions or keep/discard actions
 - 🔍 **Fast Review UI** – Swipe through frames, keep or delete with a tap
 - 💾 **Local Storage** – All frames stored on device, review offline
-- 📤 **Photos Export** – Save kept frames to Photos for upload to Roboflow
+- ☁️ **Bulk Upload** – Upload kept frames directly to Roboflow with progress tracking
+- 🏷️ **Auto-Nullify** – Automatically marks uploaded frames as null/negative examples
 - 🤖 **Roboflow Integration** – Direct inference through Roboflow's API
 - ⚙️ **Configurable Threshold** – Adjust confidence levels for capture sensitivity
 
@@ -61,47 +65,55 @@ When training object detection models, it's important to include negative exampl
    - Navigate to your model version
    - Copy the Model ID (format: `workspace/version`, e.g., `my-workspace/3`)
    - Get your API key from your [Roboflow settings](https://app.roboflow.com/settings/api)
+   - Note your **Workspace** name and **Project ID** from your project URL
 
 2. **Configure Scout:**
    - Open Scout and tap the **Settings** tab
-   - Enter your **Model ID**
+   - Enter your **Model ID** (for inference)
    - Enter your **API Key**
+   - Enter your **Workspace** name (for upload)
+   - Enter your **Project ID** (for upload)
    - Adjust **Confidence Threshold** if needed (default: 40%)
 
 ### Usage
 
-#### Scanning for Null Frames
+#### Scouting for False Positives
 
 1. Tap the **Scan** tab
 2. Point the camera at scenes where your model should **NOT** detect anything
-3. Tap **Start** to begin scanning
-4. Scout checks frames every 2 seconds
-5. When a detection occurs (false positive), the frame is automatically saved
-6. The counter shows how many frames have been captured
-7. Tap **Stop** when finished
+3. Tap **Start** to begin detection mode
+4. Scout runs inference continuously in the background
+5. When you see a false positive, **press and hold** the record button (circular button)
+6. While holding, frames with detections are saved (duplicate frames are automatically filtered)
+7. Release the button to stop saving frames
+8. The counter shows how many frames have been captured
+9. Switch cameras with the flip button if needed
+10. Tap **Stop Scanning** when finished
 
 **Tips:**
-- Switch between front and back cameras using the camera flip button
-- Try different backgrounds, lighting, and angles
-- Look for scenes similar to where your model will be deployed
+- Detection runs continuously—you only save what you want by holding the button
+- This prevents accidental true-positive captures (e.g., walking past actual objects)
+- Hold the button steady for a few seconds to capture variations
+- Similar frames are automatically deduplicated using perceptual hashing
 
 #### Reviewing Frames
 
 1. Tap the **Review** tab (badge shows frame count)
 2. **Swipe left/right** to navigate through captured frames
-3. Tap **Keep** (green) to mark a frame for export, or tap again to discard (orange)
+3. Tap **Keep** (green) to mark a frame for upload, or tap to toggle to discard (orange)
 4. Tap **Delete** (red) to remove a frame entirely
-5. Use the menu (•••) to export or clear all frames
+5. Use the **Undo button** (↩️) in the top left to undo the last action
+6. Use the menu (•••) to upload or clear all frames
 
-#### Exporting to Roboflow
+#### Uploading to Roboflow
 
 1. In the Review tab, tap the menu (•••) in the top right
-2. Select **Export Kept Frames**
-3. Tap **Save to Photos** to export frames to your Photos library
-4. Open [Roboflow](https://app.roboflow.com) in your browser
-5. Navigate to your project and upload the exported images
-6. Label them as negative examples (or leave them unlabeled as null frames)
-7. Generate a new model version and retrain
+2. Select **Upload & Nullify**
+3. Tap **Upload & Nullify** to start the bulk upload
+4. Scout uploads kept frames to Roboflow and marks them as null/negative examples
+5. Progress is shown with a progress bar
+6. Once complete, frames are ready in your Roboflow project
+7. Generate a new model version and retrain to reduce false positives
 
 ### Example Scenarios
 
@@ -122,9 +134,11 @@ When training object detection models, it's important to include negative exampl
 - **Language:** Swift 5.0
 - **Framework:** SwiftUI
 - **Platform:** iOS 16.0+
-- **API:** Roboflow Inference API
+- **API:** Roboflow Inference & Upload APIs
 - **Camera:** AVFoundation
 - **Storage:** UserDefaults + Documents Directory
+- **Image Similarity:** Perceptual hashing (custom implementation)
+- **Architecture:** MVVM with ObservableObject state management
 
 ## Privacy & Security
 
