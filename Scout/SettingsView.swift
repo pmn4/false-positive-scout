@@ -73,9 +73,13 @@ struct SettingsView: View {
                             oauthManager.signOut()
                             workspaces = []
                             projects = []
+                            // Clear previous* BEFORE selected* to prevent isRealChange wipe
+                            previousWorkspace = nil
+                            previousModelProject = nil
+                            selectedModelProject = nil
                             selectedWorkspace = nil
                             // Preserve API key upload project on sign out (API key path still needs it)
-                            // Do NOT clear: project
+                            // Do NOT clear: project, modelProject, modelVersion, or currentModel (keep cached model for API key fallback)
                         }) {
                             HStack {
                                 Spacer()

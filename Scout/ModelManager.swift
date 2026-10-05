@@ -176,6 +176,9 @@ class ModelManager: ObservableObject {
             .appendingPathExtension("mlmodel")
         try fileManager.moveItem(at: tempURL, to: tempWithExtension)
         
+        // Clean up temp file even if compile throws
+        defer { try? fileManager.removeItem(at: tempWithExtension) }
+        
         // Compile the model (creates .mlmodelc)
         let cacheDir = getCacheDirectory()
         if !fileManager.fileExists(atPath: cacheDir.path) {
@@ -183,9 +186,6 @@ class ModelManager: ObservableObject {
         }
         
         let compiledURL = try MLModel.compileModel(at: tempWithExtension)
-        
-        // Clean up temp file after compile
-        defer { try? fileManager.removeItem(at: tempWithExtension) }
         
         // Move compiled model to cache
         if fileManager.fileExists(atPath: cacheURL.path) {

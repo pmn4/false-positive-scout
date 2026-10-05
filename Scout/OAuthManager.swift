@@ -289,10 +289,11 @@ class OAuthManager: NSObject, ObservableObject {
         guard httpResponse.statusCode == 200 else {
             // Only sign out on 400/401 (invalid_grant / expired refresh token)
             // Keep tokens for temporary errors (5xx, 429) and let user retry
-            if httpResponse.statusCode == 400 || httpResponse.statusCode == 401 {
+            let shouldSignOut = httpResponse.statusCode == 400 || httpResponse.statusCode == 401
+            if shouldSignOut {
                 signOut()
             }
-            throw OAuthError.refreshFailed
+            throw OAuthError.refreshFailed(signedOut: shouldSignOut)
         }
         
         let decoder = JSONDecoder()
@@ -458,7 +459,7 @@ enum OAuthError: LocalizedError {
     case invalidResponse
     case noAccessToken
     case noRefreshToken
-    case refreshFailed
+    case refreshFailed(signedOut: Bool)
     
     var errorDescription: String? {
         switch self {
@@ -484,8 +485,12 @@ enum OAuthError: LocalizedError {
             return "No access token available. Please sign in."
         case .noRefreshToken:
             return "No refresh token available. Please sign in again."
-        case .refreshFailed:
-            return "Session expired. Please sign in again."
+        case .refreshFailed(let signedOut):
+            if signedOut {
+                return "Session expired. Please sign in again."
+            } else {
+                return "Token refresh failed. Please try again."
+            }
         }
     }
 }
