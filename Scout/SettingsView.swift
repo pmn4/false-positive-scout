@@ -457,28 +457,23 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .onChange(of: oauthManager.isAuthenticated) { isAuth in
                 // Reset state when OAuthManager self-signOut (refresh 400/401) flips isAuthenticated
+                // Match Sign Out button preserve semantics for dual-auth fallback
                 if !isAuth {
-                    // Clear all OAuth-populated state (same as Sign Out button)
+                    // Clear only ephemeral OAuth-populated @State (not AppStorage or cached model)
                     workspaces = []
-                    selectedWorkspace = nil
-                    previousWorkspace = nil
                     projects = []
-                    project = ""
-                    selectedModelProject = nil
-                    previousModelProject = nil
-                    modelProject = ""
-                    modelWorkspace = ""
-                    modelVersion = ""
                     modelVersions = []
                     isLoadingProjects = false
                     isLoadingVersions = false
                     loadError = nil
-                    loadGeneration += 1
-                    modelManager.currentModel = nil
-                    modelManager.currentVNCoreMLModel = nil
-                    modelManager.loadedWorkspace = nil
-                    modelManager.loadedProject = nil
-                    modelManager.loadedVersion = nil
+                    loadGeneration += 1  // Cancel in-flight loads
+                    // Clear previous* BEFORE selected* to prevent isRealChange wipe
+                    previousWorkspace = nil
+                    previousModelProject = nil
+                    selectedModelProject = nil
+                    selectedWorkspace = nil
+                    // Preserve API key upload project on self-signOut (API key path still needs it)
+                    // Do NOT clear: project, modelProject, modelWorkspace, modelVersion, or currentModel (keep cached model for API key fallback)
                 }
             }
             .onAppear {
