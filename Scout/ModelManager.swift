@@ -202,7 +202,10 @@ class ModelManager: ObservableObject {
     }
     
     private func loadCachedModel(from url: URL, workspace: String, project: String, version: String) async throws {
-        let mlModel = try MLModel(contentsOf: url)
+        // YoloLite needs .cpuAndGPU (Neural Engine fp16 underflow breaks decode)
+        let config = MLModelConfiguration()
+        config.computeUnits = .cpuAndGPU
+        let mlModel = try MLModel(contentsOf: url, configuration: config)
         
         // Build VNCoreMLModel once for reuse per frame
         let vnModel = try VNCoreMLModel(for: mlModel)

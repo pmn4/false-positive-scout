@@ -73,6 +73,9 @@ struct SettingsView: View {
                             oauthManager.signOut()
                             workspaces = []
                             projects = []
+                            modelVersions = []
+                            isLoadingProjects = false
+                            isLoadingVersions = false
                             // Clear previous* BEFORE selected* to prevent isRealChange wipe
                             previousWorkspace = nil
                             previousModelProject = nil
@@ -295,7 +298,7 @@ struct SettingsView: View {
                                         .foregroundColor(.secondary)
                                     Spacer()
                                 }
-                            } else if !modelVersions.isEmpty {
+                            } else if !modelVersions.isEmpty && selectedModelProject != nil {
                                 Picker("Model Version", selection: $modelVersion) {
                                     Text("Select version").tag("")
                                     ForEach(modelVersions) { version in
