@@ -590,7 +590,8 @@ struct SettingsView: View {
                     self.isLoadingVersions = false
                     
                     if !versions.isEmpty && modelVersion.isEmpty {
-                        self.modelVersion = versions.last?.id ?? ""
+                        // Roboflow lists newest-first, use .first (newest) not .last (oldest)
+                        self.modelVersion = versions.first?.id ?? ""
                     }
                 }
             } catch {

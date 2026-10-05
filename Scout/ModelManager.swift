@@ -305,16 +305,28 @@ class ModelManager: ObservableObject {
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
         try handler.perform([request])
         
-        // Check if results are standard Vision object detections
-        guard let results = request.results as? [VNRecognizedObjectObservation] else {
-            // RF-DETR and other custom models output feature maps, not VNRecognizedObjectObservation
-            // They require custom post-processing of MLMultiArray outputs
+        // Accept VNDetectedObjectObservation (YOLOv5-style) or VNRecognizedObjectObservation (with labels)
+        guard let results = request.results as? [VNDetectedObjectObservation] else {
+            // Some models output feature maps requiring custom post-processing
             throw ModelError.unsupportedModelType
         }
         
         // Convert Vision results to Detection format
         let detections = results.compactMap { observation -> Detection? in
-            guard observation.confidence >= confidenceThreshold else { return nil }
+            // YoloLite NMS confidence: match roboflow-swift score calculation
+            var score = Double(observation.confidence)
+            var className = "object"
+            
+            // VNRecognizedObjectObservation (subclass) has labels
+            if let recognized = observation as? VNRecognizedObjectObservation,
+               let topLabel = recognized.labels.first {
+                className = topLabel.identifier
+                // Combine observation confidence with label confidence (NMS score)
+                score = min(Double(observation.confidence) * Double(topLabel.confidence), 1.0)
+            }
+            
+            // Skip zeroed NMS rows and low confidence
+            guard score >= Double(confidenceThreshold) else { return nil }
             
             let boundingBox = observation.boundingBox
             let imageWidth = Double(image.size.width)
@@ -327,14 +339,12 @@ class ModelManager: ObservableObject {
             let width = boundingBox.width * imageWidth
             let height = boundingBox.height * imageHeight
             
-            let className = observation.labels.first?.identifier ?? "object"
-            
             return Detection(
                 x: x,
                 y: y,
                 width: width,
                 height: height,
-                confidence: Double(observation.confidence),
+                confidence: score,
                 className: className
             )
         }
@@ -375,7 +385,7 @@ enum ModelError: LocalizedError {
         case .imageConversionFailed:
             return "Failed to convert image for inference"
         case .unsupportedModelType:
-            return "This model type (likely RF-DETR) requires custom post-processing not yet implemented. Please use a YOLOv5/YOLOv8 or standard Vision-compatible Core ML model."
+            return "This model type outputs feature maps requiring custom post-processing that is not yet implemented. Please use a different model architecture (e.g., YOLOv5, YOLOv8, or standard Vision-compatible detector)."
         }
     }
 }

@@ -50,6 +50,9 @@ class OAuthManager: NSObject, ObservableObject {
     private var currentVerifier: String?
     private var currentState: String?
     
+    // Shared refresh task to prevent concurrent refreshes
+    private var refreshTask: Task<Void, Error>?
+    
     override private init() {
         super.init()
         checkAuthenticationStatus()
@@ -263,55 +266,73 @@ class OAuthManager: NSObject, ObservableObject {
         let expiryDate = Date().addingTimeInterval(TimeInterval(tokenResponse.expires_in ?? 3600))
         UserDefaults.standard.set(expiryDate.timeIntervalSince1970, forKey: tokenExpiryKey)
         
-        DispatchQueue.main.async {
+        // Set flag synchronously (not deferred async) so getAuthMethod sees it immediately
+        if Thread.isMainThread {
             self.isAuthenticated = true
+        } else {
+            DispatchQueue.main.sync {
+                self.isAuthenticated = true
+            }
         }
     }
     
     private func refreshAccessToken() async throws {
-        guard let refreshToken = getFromKeychain(key: refreshTokenKey) else {
-            throw OAuthError.noRefreshToken
+        // Serialize refresh: share one in-flight Task for concurrent waiters
+        // Prevents dual refresh from rotating refresh token then 400/401 signOut
+        if let existingTask = refreshTask {
+            return try await existingTask.value
         }
         
-        var request = URLRequest(url: URL(string: tokenEndpoint)!)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        
-        let bodyParams = [
-            "grant_type": "refresh_token",
-            "client_id": clientId,
-            "refresh_token": refreshToken
-        ]
-        
-        request.httpBody = formURLEncode(bodyParams).data(using: .utf8)
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw OAuthError.invalidResponse
-        }
-        
-        guard httpResponse.statusCode == 200 else {
-            // Only sign out on 400/401 (invalid_grant / expired refresh token)
-            // Keep tokens for temporary errors (5xx, 429) and let user retry
-            let shouldSignOut = httpResponse.statusCode == 400 || httpResponse.statusCode == 401
-            if shouldSignOut {
-                signOut()
+        let task = Task<Void, Error> {
+            defer { refreshTask = nil }
+            
+            guard let refreshToken = getFromKeychain(key: refreshTokenKey) else {
+                throw OAuthError.noRefreshToken
             }
-            throw OAuthError.refreshFailed(signedOut: shouldSignOut)
+            
+            var request = URLRequest(url: URL(string: tokenEndpoint)!)
+            request.httpMethod = "POST"
+            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            
+            let bodyParams = [
+                "grant_type": "refresh_token",
+                "client_id": clientId,
+                "refresh_token": refreshToken
+            ]
+            
+            request.httpBody = formURLEncode(bodyParams).data(using: .utf8)
+            
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw OAuthError.invalidResponse
+            }
+            
+            guard httpResponse.statusCode == 200 else {
+                // Only sign out on 400/401 (invalid_grant / expired refresh token)
+                // Keep tokens for temporary errors (5xx, 429) and let user retry
+                let shouldSignOut = httpResponse.statusCode == 400 || httpResponse.statusCode == 401
+                if shouldSignOut {
+                    signOut()
+                }
+                throw OAuthError.refreshFailed(signedOut: shouldSignOut)
+            }
+            
+            let decoder = JSONDecoder()
+            let tokenResponse = try decoder.decode(TokenResponse.self, from: data)
+            
+            // Update tokens
+            saveToKeychain(key: accessTokenKey, value: tokenResponse.access_token)
+            if let newRefreshToken = tokenResponse.refresh_token {
+                saveToKeychain(key: refreshTokenKey, value: newRefreshToken)
+            }
+            
+            let expiryDate = Date().addingTimeInterval(TimeInterval(tokenResponse.expires_in ?? 3600))
+            UserDefaults.standard.set(expiryDate.timeIntervalSince1970, forKey: tokenExpiryKey)
         }
         
-        let decoder = JSONDecoder()
-        let tokenResponse = try decoder.decode(TokenResponse.self, from: data)
-        
-        // Update tokens
-        saveToKeychain(key: accessTokenKey, value: tokenResponse.access_token)
-        if let newRefreshToken = tokenResponse.refresh_token {
-            saveToKeychain(key: refreshTokenKey, value: newRefreshToken)
-        }
-        
-        let expiryDate = Date().addingTimeInterval(TimeInterval(tokenResponse.expires_in ?? 3600))
-        UserDefaults.standard.set(expiryDate.timeIntervalSince1970, forKey: tokenExpiryKey)
+        refreshTask = task
+        try await task.value
     }
     
     private func checkAuthenticationStatus() {
