@@ -135,8 +135,16 @@ class OAuthManager: NSObject, ObservableObject {
             }
         }
         
-        // Try to refresh the token
-        try await refreshAccessToken()
+        // Try to refresh the token (calls signOut if refresh fails)
+        do {
+            try await refreshAccessToken()
+        } catch OAuthError.noRefreshToken {
+            // No refresh token available - clear stale session
+            await MainActor.run {
+                signOut()
+            }
+            throw OAuthError.noRefreshToken
+        }
         
         guard let token = getFromKeychain(key: accessTokenKey) else {
             throw OAuthError.noAccessToken
@@ -275,12 +283,17 @@ class OAuthManager: NSObject, ObservableObject {
     }
     
     private func checkAuthenticationStatus() {
-        // Check if we have stored tokens
-        if let accessToken = getFromKeychain(key: accessTokenKey),
-           !accessToken.isEmpty {
-            DispatchQueue.main.async {
-                self.isAuthenticated = true
-            }
+        // Check if we have a usable OAuth session (access token + refresh token OR valid expiry)
+        // Don't report "authenticated" if we only have a stale access token blob
+        let hasAccessToken = getFromKeychain(key: accessTokenKey) != nil
+        let hasRefreshToken = getFromKeychain(key: refreshTokenKey) != nil
+        let hasExpiry = UserDefaults.standard.object(forKey: tokenExpiryKey) != nil
+        
+        // Consider authenticated only if we have access token AND (refresh token OR expiry tracking)
+        let isUsableSession = hasAccessToken && (hasRefreshToken || hasExpiry)
+        
+        DispatchQueue.main.async {
+            self.isAuthenticated = isUsableSession
         }
     }
     

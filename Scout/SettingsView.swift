@@ -72,7 +72,8 @@ struct SettingsView: View {
                             workspaces = []
                             projects = []
                             selectedWorkspace = nil
-                            project = ""
+                            // Preserve API key upload project on sign out (API key path still needs it)
+                            // Do NOT clear: project
                         }) {
                             HStack {
                                 Spacer()
@@ -237,6 +238,10 @@ struct SettingsView: View {
                                 if let proj = newProject, let ws = selectedWorkspace {
                                     modelProject = proj.id
                                     modelWorkspace = ws.url
+                                    // Clear stale model version/loaded model when project changes
+                                    modelVersion = ""
+                                    modelManager.currentModel = nil
+                                    modelManager.currentVNCoreMLModel = nil
                                     loadModelVersions(workspace: ws.url, project: proj.id)
                                 } else {
                                     modelVersions = []
@@ -263,6 +268,13 @@ struct SettingsView: View {
                                 }
                                 
                                 if !modelVersion.isEmpty && !modelWorkspace.isEmpty && !modelProject.isEmpty {
+                                    // Check if the loaded model matches the selected version
+                                    let projectSlug = modelProject.split(separator: "/").last.map(String.init) ?? modelProject
+                                    let isModelReady = modelManager.currentModel != nil &&
+                                        modelManager.loadedWorkspace == modelWorkspace &&
+                                        modelManager.loadedProject == projectSlug &&
+                                        modelManager.loadedVersion == modelVersion
+                                    
                                     if modelManager.isDownloading {
                                         HStack {
                                             ProgressView(value: modelManager.downloadProgress)
@@ -271,7 +283,7 @@ struct SettingsView: View {
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
                                         }
-                                    } else if modelManager.currentModel != nil {
+                                    } else if isModelReady {
                                         HStack {
                                             Image(systemName: "checkmark.circle.fill")
                                                 .foregroundColor(.green)
@@ -378,36 +390,7 @@ struct SettingsView: View {
                     loadWorkspacesAndProjects()
                 }
                 
-                // Auto-load cached model if configured
-                loadCachedModelIfAvailable()
-            }
-        }
-    }
-    
-    private func loadCachedModelIfAvailable() {
-        guard !modelWorkspace.isEmpty, !modelProject.isEmpty, !modelVersion.isEmpty else {
-            return
-        }
-        
-        // Check if cache file exists
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("RoboflowModels")
-        let cacheURL = cacheDir.appendingPathComponent("\(modelWorkspace)_\(modelProject)_v\(modelVersion).mlpackage")
-        
-        guard FileManager.default.fileExists(atPath: cacheURL.path),
-              modelManager.currentModel == nil else {
-            return
-        }
-        
-        // Load the cached model
-        Task {
-            do {
-                let mlModel = try MLModel(contentsOf: cacheURL)
-                await MainActor.run {
-                    modelManager.currentModel = mlModel
-                }
-            } catch {
-                print("Failed to load cached model: \(error)")
+                // Model is now auto-loaded at app startup by ModelManager.init
             }
         }
     }

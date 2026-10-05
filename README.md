@@ -192,17 +192,19 @@ Scout uses **https://** redirect URIs via iOS Universal Links (required by Robof
    - Enter your **Project ID** (from your project URL, e.g., `my-project`)
 
 3. **Download an on-device model:**
-   - Under **On-Device Detection Model**, you still need OAuth for listing models
-   - **Alternative:** If you don't want OAuth at all:
-     - Download a Core ML model manually from Roboflow (export as CoreML)
-     - Use the Roboflow iOS SDK directly (not covered in this quick path)
-     - For now, use OAuth just for model download, then sign out and use API key for uploads
+   - **Current limitation:** In-app model download requires OAuth authentication
+   - **API key users cannot download models directly in Scout at this time**
+   - **Workaround options:**
+     - Sign in with OAuth to download the model, then sign out and use API key for uploads
+     - Or manually download a Core ML model from Roboflow and load it via code (not covered in this quick path)
 
 4. **Start scouting:**
    - API key will be used for upload, tagging, nullify, and batch creation
-   - All features work the same as OAuth path
+   - All upload features work the same as OAuth path
 
-**Note:** OAuth takes priority. If you're signed in with OAuth, the API key is ignored. Sign out to use API key.
+**Notes:** 
+- OAuth takes priority. If you're signed in with OAuth, the API key is ignored. Sign out to use API key for uploads.
+- The "Start" button on the Scan tab remains disabled until a model is loaded (requires OAuth model download for now).
 
 ---
 

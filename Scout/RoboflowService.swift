@@ -170,12 +170,19 @@ class RoboflowService {
         
         let base64String = imageData.base64EncodedString()
         
-        // Upload using Bearer token, with optional batch grouping
-        var components = URLComponents(string: "https://api.roboflow.com/dataset/\(project)/upload")!
+        // Extract project slug from qualified ID (ws/proj -> proj)
+        let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
+        
+        // Upload using Bearer token, with tag and batch as query params
+        var components = URLComponents(string: "https://api.roboflow.com/dataset/\(projectSlug)/upload")!
         var queryItems = [
             URLQueryItem(name: "name", value: imageName),
             URLQueryItem(name: "split", value: "train")
         ]
+        
+        if let tag = tag, !tag.isEmpty {
+            queryItems.append(URLQueryItem(name: "tag", value: tag))
+        }
         
         if let batchName = batchName, !batchName.isEmpty {
             queryItems.append(URLQueryItem(name: "batch", value: batchName))
@@ -204,12 +211,6 @@ class RoboflowService {
         
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let imageId = json["id"] as? String {
-            
-            // Tag the uploaded image if tag is provided (fail upload if tagging fails)
-            if let tag = tag, !tag.isEmpty {
-                try await tagImage(imageId: imageId, project: project, tag: tag)
-            }
-            
             return imageId
         }
         
@@ -231,12 +232,19 @@ class RoboflowService {
         
         let base64String = imageData.base64EncodedString()
         
-        var components = URLComponents(string: "https://api.roboflow.com/dataset/\(project)/upload")!
+        // Extract project slug from qualified ID
+        let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
+        
+        var components = URLComponents(string: "https://api.roboflow.com/dataset/\(projectSlug)/upload")!
         var queryItems = [
             URLQueryItem(name: "api_key", value: apiKey),
             URLQueryItem(name: "name", value: imageName),
             URLQueryItem(name: "split", value: "train")
         ]
+        
+        if let tag = tag, !tag.isEmpty {
+            queryItems.append(URLQueryItem(name: "tag", value: tag))
+        }
         
         if let batchName = batchName, !batchName.isEmpty {
             queryItems.append(URLQueryItem(name: "batch", value: batchName))
@@ -263,50 +271,12 @@ class RoboflowService {
         
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let imageId = json["id"] as? String {
-            
-            // Tag if provided (fail upload if tagging fails)
-            if let tag = tag, !tag.isEmpty {
-                try await tagImageWithAPIKey(imageId: imageId, project: project, tag: tag, apiKey: apiKey)
-            }
-            
             return imageId
         }
         
         throw RoboflowError.uploadFailed(message: "No image ID returned")
     }
     
-    // Tag an uploaded image (OAuth Bearer token)
-    private func tagImage(imageId: String, project: String, tag: String) async throws {
-        let accessToken = try await OAuthManager.shared.getAccessToken()
-        
-        let url = URL(string: "https://api.roboflow.com/dataset/\(project)/\(imageId)/tag?tag=\(tag)")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            let errorMessage = String(data: data, encoding: .utf8) ?? "Tagging failed"
-            throw RoboflowError.uploadFailed(message: "Failed to tag image: \(errorMessage)")
-        }
-    }
-    
-    // Tag an uploaded image (API key)
-    private func tagImageWithAPIKey(imageId: String, project: String, tag: String, apiKey: String) async throws {
-        let url = URL(string: "https://api.roboflow.com/dataset/\(project)/\(imageId)/tag?tag=\(tag)&api_key=\(apiKey)")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            let errorMessage = String(data: data, encoding: .utf8) ?? "Tagging failed"
-            throw RoboflowError.uploadFailed(message: "Failed to tag image: \(errorMessage)")
-        }
-    }
     
     // Annotate image as null using COCO JSON format (OAuth or API key)
     // Matches Roboflow CLI/SDK mechanism for marking null/negative examples
@@ -339,7 +309,10 @@ class RoboflowService {
             throw RoboflowError.annotationFailed(message: "Failed to create COCO JSON")
         }
         
-        var components = URLComponents(string: "https://api.roboflow.com/dataset/\(project)/annotate/\(imageId)")!
+        // Extract project slug from qualified ID
+        let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
+        
+        var components = URLComponents(string: "https://api.roboflow.com/dataset/\(projectSlug)/annotate/\(imageId)")!
         components.queryItems = [
             URLQueryItem(name: "name", value: "\(imageName).coco.json")
         ]
