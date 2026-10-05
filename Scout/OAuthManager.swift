@@ -91,7 +91,19 @@ class OAuthManager: NSObject, ObservableObject {
                     callbackURLScheme: "https"
                 ) { callbackURL, error in
                     if let error = error {
-                        continuation.resume(throwing: OAuthError.authorizationFailed(error.localizedDescription))
+                        // Clear PKCE session state on error
+                        self.currentVerifier = nil
+                        self.currentState = nil
+                        
+                        // Handle user cancel gracefully (ASWebAuthenticationSessionError.canceledLogin)
+                        let nsError = error as NSError
+                        if nsError.domain == "com.apple.AuthenticationServices.WebAuthenticationSession"
+                           && nsError.code == 1 {
+                            // User canceled - friendly message
+                            continuation.resume(throwing: OAuthError.authorizationFailed("Sign in canceled"))
+                        } else {
+                            continuation.resume(throwing: OAuthError.authorizationFailed(error.localizedDescription))
+                        }
                         return
                     }
                     
@@ -275,8 +287,11 @@ class OAuthManager: NSObject, ObservableObject {
         }
         
         guard httpResponse.statusCode == 200 else {
-            // Refresh token expired or invalid, need to sign in again
-            signOut()
+            // Only sign out on 400/401 (invalid_grant / expired refresh token)
+            // Keep tokens for temporary errors (5xx, 429) and let user retry
+            if httpResponse.statusCode == 400 || httpResponse.statusCode == 401 {
+                signOut()
+            }
             throw OAuthError.refreshFailed
         }
         

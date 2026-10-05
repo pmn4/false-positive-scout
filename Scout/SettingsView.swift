@@ -472,9 +472,11 @@ struct SettingsView: View {
                     if !modelWorkspace.isEmpty,
                        let saved = loadedWorkspaces.first(where: { $0.url == modelWorkspace }) {
                         self.selectedWorkspace = saved
+                        self.previousWorkspace = saved  // Set previous to avoid clearing on first switch
                         loadProjects(workspace: saved.url)
                     } else if let first = loadedWorkspaces.first {
                         self.selectedWorkspace = first
+                        self.previousWorkspace = first  // Set previous to avoid clearing on first switch
                         loadProjects(workspace: first.url)
                     }
                 }
@@ -506,6 +508,11 @@ struct SettingsView: View {
                     if !modelProject.isEmpty,
                        let saved = loadedProjects.first(where: { $0.id == modelProject }) {
                         self.selectedModelProject = saved
+                        self.previousModelProject = saved  // Set previous to avoid clearing on first switch
+                        // Load model versions directly since onChange won't fire
+                        if !modelWorkspace.isEmpty {
+                            loadModelVersions(workspace: modelWorkspace, project: saved.id)
+                        }
                     }
                 }
             } catch {

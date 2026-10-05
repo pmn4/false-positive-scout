@@ -133,7 +133,22 @@ class ModelManager: ObservableObject {
         }
         
         // Download the .mlmodel file (or .zip containing it)
-        let (tempURL, _) = try await URLSession.shared.download(from: modelURL)
+        let (tempURL, downloadResponse) = try await URLSession.shared.download(from: modelURL)
+        
+        // Check HTTP status before treating response as a model
+        guard let httpResponse = downloadResponse as? HTTPURLResponse else {
+            try? fileManager.removeItem(at: tempURL)
+            throw ModelError.downloadFailed("Invalid download response")
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            try? fileManager.removeItem(at: tempURL)
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                throw ModelError.downloadFailed("Authentication failed (status \(httpResponse.statusCode))")
+            } else {
+                throw ModelError.downloadFailed("Download failed with status \(httpResponse.statusCode)")
+            }
+        }
         
         // Detect if downloaded file is a zip
         let pathExtension = tempURL.pathExtension.lowercased()
@@ -151,6 +166,7 @@ class ModelManager: ObservableObject {
         if isZip || isZipByContent {
             // Core ML models packaged as .zip require unzipping
             // iOS doesn't have built-in sync unzip, and async Process isn't available
+            try? fileManager.removeItem(at: tempURL)
             throw ModelError.zipNotSupported
         }
         
@@ -167,6 +183,9 @@ class ModelManager: ObservableObject {
         }
         
         let compiledURL = try MLModel.compileModel(at: tempWithExtension)
+        
+        // Clean up temp file after compile
+        defer { try? fileManager.removeItem(at: tempWithExtension) }
         
         // Move compiled model to cache
         if fileManager.fileExists(atPath: cacheURL.path) {
