@@ -47,15 +47,15 @@ class RoboflowService {
         case none
     }
     
-    private func getAuthMethod(apiKey: String? = nil) async -> AuthMethod {
-        // Try OAuth first if signed in
+    private func getAuthMethod(apiKey: String? = nil) async throws -> AuthMethod {
+        // If OAuth is active (signed in), use it exclusively - do not fall back to API key
         if OAuthManager.shared.isAuthenticated {
-            if let token = try? await OAuthManager.shared.getAccessToken() {
-                return .oauth(token: token)
-            }
+            // Propagate OAuth token failures (will trigger sign out if expired)
+            let token = try await OAuthManager.shared.getAccessToken()
+            return .oauth(token: token)
         }
         
-        // Fall back to API key if provided and not signed in
+        // Only use API key when NOT signed in with OAuth
         if let key = apiKey, !key.isEmpty {
             return .apiKey(key: key)
         }
@@ -67,7 +67,7 @@ class RoboflowService {
     
     // List all workspaces accessible to the authenticated user
     func listWorkspaces(apiKey: String? = nil) async throws -> [Workspace] {
-        let auth = await getAuthMethod(apiKey: apiKey)
+        let auth = try await getAuthMethod(apiKey: apiKey)
         
         guard case .oauth(let token) = auth else {
             throw RoboflowError.authenticationRequired
@@ -91,7 +91,7 @@ class RoboflowService {
     
     // List all projects in a workspace
     func listProjects(workspace: String, apiKey: String? = nil) async throws -> [Project] {
-        let auth = await getAuthMethod(apiKey: apiKey)
+        let auth = try await getAuthMethod(apiKey: apiKey)
         
         var url = URL(string: "https://api.roboflow.com/\(workspace)")!
         var request = URLRequest(url: url)
@@ -147,7 +147,7 @@ class RoboflowService {
         batchName: String? = nil,
         apiKey: String? = nil
     ) async throws -> String {
-        let auth = await getAuthMethod(apiKey: apiKey)
+        let auth = try await getAuthMethod(apiKey: apiKey)
         
         guard case .oauth(let token) = auth, true else {
             // API key path exists but requires different handling
@@ -288,7 +288,7 @@ class RoboflowService {
         project: String,
         apiKey: String? = nil
     ) async throws {
-        let auth = await getAuthMethod(apiKey: apiKey)
+        let auth = try await getAuthMethod(apiKey: apiKey)
         
         // Build COCO JSON with image but no annotations (null example)
         let cocoJson: [String: Any] = [

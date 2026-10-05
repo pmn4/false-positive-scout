@@ -5,7 +5,6 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage("scout_project") private var project: String = ""
-    @AppStorage("scout_api_key") private var apiKey: String = ""
     @AppStorage("scout_model_workspace") private var modelWorkspace: String = ""
     @AppStorage("scout_model_project") private var modelProject: String = ""
     @AppStorage("scout_model_version") private var modelVersion: String = ""
@@ -13,6 +12,7 @@ struct SettingsView: View {
     
     @ObservedObject var oauthManager = OAuthManager.shared
     @ObservedObject var modelManager = ModelManager.shared
+    @State private var apiKey: String = ""  // Load from Keychain on appear
     @State private var isSigningIn = false
     @State private var signInError: String?
     @State private var workspaces: [Workspace] = []
@@ -178,11 +178,21 @@ struct SettingsView: View {
                                     }
                                 }
                                 .onChange(of: selectedWorkspace) { newWorkspace in
+                                    // Clear upload project, model project/version, and loaded model when workspace changes
+                                    projects = []
+                                    project = ""
+                                    selectedModelProject = nil
+                                    modelProject = ""
+                                    modelVersion = ""
+                                    modelVersions = []
+                                    modelManager.currentModel = nil
+                                    modelManager.currentVNCoreMLModel = nil
+                                    modelManager.loadedWorkspace = nil
+                                    modelManager.loadedProject = nil
+                                    modelManager.loadedVersion = nil
+                                    
                                     if let workspace = newWorkspace {
                                         loadProjects(workspace: workspace.url)
-                                    } else {
-                                        projects = []
-                                        project = ""
                                     }
                                 }
                             }
@@ -268,12 +278,13 @@ struct SettingsView: View {
                                 }
                                 
                                 if !modelVersion.isEmpty && !modelWorkspace.isEmpty && !modelProject.isEmpty {
-                                    // Check if the loaded model matches the selected version
+                                    // Check if the loaded model matches the selected version (strip to slugs)
                                     let projectSlug = modelProject.split(separator: "/").last.map(String.init) ?? modelProject
+                                    let versionNum = modelVersion.split(separator: "/").last.map(String.init) ?? modelVersion
                                     let isModelReady = modelManager.currentModel != nil &&
                                         modelManager.loadedWorkspace == modelWorkspace &&
                                         modelManager.loadedProject == projectSlug &&
-                                        modelManager.loadedVersion == modelVersion
+                                        modelManager.loadedVersion == versionNum
                                     
                                     if modelManager.isDownloading {
                                         HStack {
@@ -386,11 +397,22 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .onAppear {
+                // Load API key from Keychain
+                apiKey = KeychainHelper.loadAPIKey() ?? ""
+                
                 if oauthManager.isAuthenticated && workspaces.isEmpty {
                     loadWorkspacesAndProjects()
                 }
                 
                 // Model is now auto-loaded at app startup by ModelManager.init
+            }
+            .onChange(of: apiKey) { newValue in
+                // Save API key to Keychain (not plaintext UserDefaults)
+                if newValue.isEmpty {
+                    KeychainHelper.deleteAPIKey()
+                } else {
+                    KeychainHelper.saveAPIKey(newValue)
+                }
             }
         }
     }
@@ -502,6 +524,54 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Keychain Helper for API Key
+
+struct KeychainHelper {
+    private static let apiKeyKey = "scout_api_key"
+    
+    static func saveAPIKey(_ key: String) {
+        let data = key.data(using: .utf8)!
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: apiKeyKey,
+            kSecValueData as String: data
+        ]
+        
+        // Delete any existing item first
+        SecItemDelete(query as CFDictionary)
+        
+        // Add new item
+        SecItemAdd(query as CFDictionary, nil)
+    }
+    
+    static func loadAPIKey() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: apiKeyKey,
+            kSecReturnData as String: true
+        ]
+        
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let key = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        
+        return key
+    }
+    
+    static func deleteAPIKey() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: apiKeyKey
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 }
 

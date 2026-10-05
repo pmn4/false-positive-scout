@@ -45,6 +45,10 @@ class OAuthManager: NSObject, ObservableObject {
     
     private var authSession: ASWebAuthenticationSession?
     
+    // PKCE session state (in-memory, not persisted)
+    private var currentVerifier: String?
+    private var currentState: String?
+    
     override private init() {
         super.init()
         checkAuthenticationStatus()
@@ -58,9 +62,9 @@ class OAuthManager: NSObject, ObservableObject {
         let challenge = generateCodeChallenge(from: verifier)
         let state = generateState()
         
-        // Store verifier for later exchange
-        UserDefaults.standard.set(verifier, forKey: "oauth_code_verifier")
-        UserDefaults.standard.set(state, forKey: "oauth_state")
+        // Store in memory for this session round-trip
+        currentVerifier = verifier
+        currentState = state
         
         // Build authorization URL
         var components = URLComponents(string: authorizationEndpoint)!
@@ -172,22 +176,25 @@ class OAuthManager: NSObject, ObservableObject {
         
         // Verify state
         let receivedState = queryItems.first(where: { $0.name == "state" })?.value
-        let storedState = UserDefaults.standard.string(forKey: "oauth_state")
-        guard receivedState == storedState else {
+        guard receivedState == currentState else {
+            currentVerifier = nil
+            currentState = nil
             throw OAuthError.stateMismatch
         }
         
-        // Get stored verifier
-        guard let verifier = UserDefaults.standard.string(forKey: "oauth_code_verifier") else {
+        // Get stored verifier from memory
+        guard let verifier = currentVerifier else {
+            currentVerifier = nil
+            currentState = nil
             throw OAuthError.noCodeVerifier
         }
         
         // Exchange code for tokens
         try await exchangeCodeForTokens(code: code, verifier: verifier)
         
-        // Clean up stored values
-        UserDefaults.standard.removeObject(forKey: "oauth_code_verifier")
-        UserDefaults.standard.removeObject(forKey: "oauth_state")
+        // Clean up session state
+        currentVerifier = nil
+        currentState = nil
     }
     
     private func exchangeCodeForTokens(code: String, verifier: String) async throws {
@@ -204,10 +211,7 @@ class OAuthManager: NSObject, ObservableObject {
             "code_verifier": verifier
         ]
         
-        request.httpBody = bodyParams
-            .map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0.value)" }
-            .joined(separator: "&")
-            .data(using: .utf8)
+        request.httpBody = formURLEncode(bodyParams).data(using: .utf8)
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
@@ -252,10 +256,7 @@ class OAuthManager: NSObject, ObservableObject {
             "refresh_token": refreshToken
         ]
         
-        request.httpBody = bodyParams
-            .map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0.value)" }
-            .joined(separator: "&")
-            .data(using: .utf8)
+        request.httpBody = formURLEncode(bodyParams).data(using: .utf8)
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
@@ -324,6 +325,26 @@ class OAuthManager: NSObject, ObservableObject {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+    
+    // MARK: - Form URL Encoding
+    
+    private func formURLEncode(_ params: [String: String]) -> String {
+        // Proper form-urlencoded: percent-encode all but unreserved chars
+        return params
+            .map { key, value in
+                let encodedKey = percentEncode(key)
+                let encodedValue = percentEncode(value)
+                return "\(encodedKey)=\(encodedValue)"
+            }
+            .joined(separator: "&")
+    }
+    
+    private func percentEncode(_ string: String) -> String {
+        // RFC 3986 unreserved = ALPHA / DIGIT / "-" / "." / "_" / "~"
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return string.addingPercentEncoding(withAllowedCharacters: allowed) ?? string
     }
     
     // MARK: - Keychain Methods

@@ -93,14 +93,15 @@ class ModelManager: ObservableObject {
             }
         }
         
-        // Extract project slug from qualified ID (ws/proj -> proj)
+        // Extract slugs from qualified IDs (ws/proj -> proj, ws/proj/N -> N)
         let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
+        let versionNum = version.split(separator: "/").last.map(String.init) ?? version
         
         // Check if model is already cached (compiled .mlmodelc)
-        let cacheURL = getCacheURL(workspace: workspace, project: projectSlug, version: version)
+        let cacheURL = getCacheURL(workspace: workspace, project: projectSlug, version: versionNum)
         if fileManager.fileExists(atPath: cacheURL.path) {
             do {
-                try await loadCachedModel(from: cacheURL, workspace: workspace, project: projectSlug, version: version)
+                try await loadCachedModel(from: cacheURL, workspace: workspace, project: projectSlug, version: versionNum)
                 return
             } catch {
                 // Bad cache - delete and retry download
@@ -111,8 +112,8 @@ class ModelManager: ObservableObject {
         // Download Core ML model from Roboflow (roboflow-swift pattern)
         let accessToken = try await OAuthManager.shared.getAccessToken()
         
-        // GET /coreml/{project}/{version} endpoint
-        let downloadURL = URL(string: "https://api.roboflow.com/coreml/\(projectSlug)/\(version)")!
+        // GET /coreml/{project}/{version} endpoint (version is numeric N)
+        let downloadURL = URL(string: "https://api.roboflow.com/coreml/\(projectSlug)/\(versionNum)")!
         var request = URLRequest(url: downloadURL)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         
@@ -131,8 +132,21 @@ class ModelManager: ObservableObject {
             throw ModelError.noDownloadLink
         }
         
-        // Download the .mlmodel file
+        // Download the .mlmodel file (or .zip containing it)
         let (tempURL, _) = try await URLSession.shared.download(from: modelURL)
+        
+        // Detect if downloaded file is a zip
+        let pathExtension = tempURL.pathExtension.lowercased()
+        let isZip = pathExtension == "zip"
+        
+        // Check for zip magic bytes if extension is ambiguous
+        let isZipByContent = !isZip && (try? Data(contentsOf: tempURL).prefix(2)) == Data([0x50, 0x4B])
+        
+        if isZip || isZipByContent {
+            // Core ML models packaged as .zip require unzipping
+            // iOS doesn't have built-in sync unzip, and async Process isn't available
+            throw ModelError.zipNotSupported
+        }
         
         // Compile the model (creates .mlmodelc)
         let cacheDir = getCacheDirectory()
@@ -149,7 +163,7 @@ class ModelManager: ObservableObject {
         try fileManager.moveItem(at: compiledURL, to: cacheURL)
         
         // Load the compiled model
-        try await loadCachedModel(from: cacheURL, workspace: workspace, project: projectSlug, version: version)
+        try await loadCachedModel(from: cacheURL, workspace: workspace, project: projectSlug, version: versionNum)
         
         await MainActor.run {
             downloadProgress = 1.0
@@ -203,8 +217,10 @@ class ModelManager: ObservableObject {
             return
         }
         
+        // Strip to slugs (project may be ws/proj, version may be ws/proj/N)
         let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
-        let cacheURL = getCacheURL(workspace: workspace, project: projectSlug, version: version)
+        let versionNum = version.split(separator: "/").last.map(String.init) ?? version
+        let cacheURL = getCacheURL(workspace: workspace, project: projectSlug, version: versionNum)
         
         guard fileManager.fileExists(atPath: cacheURL.path) else {
             return
@@ -212,7 +228,7 @@ class ModelManager: ObservableObject {
         
         Task {
             do {
-                try await loadCachedModel(from: cacheURL, workspace: workspace, project: projectSlug, version: version)
+                try await loadCachedModel(from: cacheURL, workspace: workspace, project: projectSlug, version: versionNum)
             } catch {
                 // Silent fail at startup - user can retry in Settings
                 print("Failed to load cached model at startup: \(error)")
@@ -238,8 +254,11 @@ class ModelManager: ObservableObject {
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
         try handler.perform([request])
         
+        // Check if results are standard Vision object detections
         guard let results = request.results as? [VNRecognizedObjectObservation] else {
-            return []
+            // RF-DETR and other custom models output feature maps, not VNRecognizedObjectObservation
+            // They require custom post-processing of MLMultiArray outputs
+            throw ModelError.unsupportedModelType
         }
         
         // Convert Vision results to Detection format
@@ -284,6 +303,7 @@ enum ModelError: LocalizedError {
     case zipNotSupported
     case noModelLoaded
     case imageConversionFailed
+    case unsupportedModelType
     
     var errorDescription: String? {
         switch self {
@@ -298,11 +318,13 @@ enum ModelError: LocalizedError {
         case .mlpackageNotFound:
             return ".mlpackage not found in downloaded archive"
         case .zipNotSupported:
-            return "ZIP model downloads not yet supported. Please use direct .mlpackage export."
+            return "This model is packaged as a ZIP file. Scout cannot unzip on iOS. Please re-export the model from Roboflow as an uncompressed Core ML model, or use a different model version."
         case .noModelLoaded:
             return "No model loaded. Please download a model first."
         case .imageConversionFailed:
             return "Failed to convert image for inference"
+        case .unsupportedModelType:
+            return "This model type (likely RF-DETR) requires custom post-processing not yet implemented. Please use a YOLOv5/YOLOv8 or standard Vision-compatible Core ML model."
         }
     }
 }
