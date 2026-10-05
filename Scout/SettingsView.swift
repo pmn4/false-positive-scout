@@ -198,8 +198,10 @@ struct SettingsView: View {
                                         // Clear upload project, model project/version, and loaded model (only on real user-driven change)
                                         projects = []
                                         project = ""
+                                        previousModelProject = nil  // Clear before selectedModelProject to avoid stale previous
                                         selectedModelProject = nil
                                         modelProject = ""
+                                        modelWorkspace = ""  // Clear with modelProject to prevent wrong restore
                                         modelVersion = ""
                                         modelVersions = []
                                         isLoadingVersions = false
@@ -217,7 +219,9 @@ struct SettingsView: View {
                                         if let workspace = newWorkspace {
                                             loadProjects(workspace: workspace.url)
                                         } else {
-                                            // Clear projects list on deselect
+                                            // Clear projects list on deselect and cancel in-flight fetch
+                                            loadGeneration += 1
+                                            isLoadingProjects = false
                                             projects = []
                                             project = ""
                                         }
@@ -282,13 +286,11 @@ struct SettingsView: View {
                                     modelProject = proj.id
                                     modelWorkspace = ws.url
                                     
-                                    // Clear model state on real change; fetch on any ID change (nil→value, value→different)
-                                    if isRealChange {
+                                    // Clear model state and fetch whenever project ID changes (nil→value, value→different)
+                                    if idChanged {
                                         modelVersion = ""
                                         modelManager.currentModel = nil
                                         modelManager.currentVNCoreMLModel = nil
-                                    }
-                                    if idChanged {
                                         loadModelVersions(workspace: ws.url, project: proj.id)
                                     }
                                 } else if idChanged {
@@ -453,6 +455,32 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .onChange(of: oauthManager.isAuthenticated) { isAuth in
+                // Reset state when OAuthManager self-signOut (refresh 400/401) flips isAuthenticated
+                if !isAuth {
+                    // Clear all OAuth-populated state (same as Sign Out button)
+                    workspaces = []
+                    selectedWorkspace = nil
+                    previousWorkspace = nil
+                    projects = []
+                    project = ""
+                    selectedModelProject = nil
+                    previousModelProject = nil
+                    modelProject = ""
+                    modelWorkspace = ""
+                    modelVersion = ""
+                    modelVersions = []
+                    isLoadingProjects = false
+                    isLoadingVersions = false
+                    loadError = nil
+                    loadGeneration += 1
+                    modelManager.currentModel = nil
+                    modelManager.currentVNCoreMLModel = nil
+                    modelManager.loadedWorkspace = nil
+                    modelManager.loadedProject = nil
+                    modelManager.loadedVersion = nil
+                }
+            }
             .onAppear {
                 // Load API key from Keychain
                 apiKey = KeychainHelper.loadAPIKey() ?? ""
