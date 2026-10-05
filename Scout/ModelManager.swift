@@ -211,6 +211,23 @@ class ModelManager: ObservableObject {
         let vnModel = try VNCoreMLModel(for: mlModel)
         
         await MainActor.run {
+            // Validate target still matches AppStorage (user may have switched workspace/project during download)
+            let currentWorkspace = UserDefaults.standard.string(forKey: "scout_model_workspace") ?? ""
+            let currentProject = UserDefaults.standard.string(forKey: "scout_model_project") ?? ""
+            let currentVersion = UserDefaults.standard.string(forKey: "scout_model_version") ?? ""
+            
+            let projectSlugTarget = project.split(separator: "/").last.map(String.init) ?? project
+            let versionNumTarget = version.split(separator: "/").last.map(String.init) ?? version
+            let currentProjectSlug = currentProject.split(separator: "/").last.map(String.init) ?? currentProject
+            let currentVersionNum = currentVersion.split(separator: "/").last.map(String.init) ?? currentVersion
+            
+            // Only publish if selection hasn't changed (ignore if workspace cleared or switched)
+            guard currentWorkspace == workspace,
+                  currentProjectSlug == projectSlugTarget,
+                  currentVersionNum == versionNumTarget else {
+                return  // Selection changed, drop this load
+            }
+            
             self.currentModel = mlModel
             self.currentVNCoreMLModel = vnModel
             // Track loaded model identity for UI validation

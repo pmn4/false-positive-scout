@@ -290,7 +290,7 @@ struct SettingsView: View {
                                     modelProject = ""
                                     modelWorkspace = ""
                                     isLoadingVersions = false
-                                    loadGeneration += 1  // Cancel in-flight version load
+                                    // Don't bump loadGeneration (races loadProjects and can stick isLoadingProjects)
                                     modelManager.currentModel = nil
                                     modelManager.currentVNCoreMLModel = nil
                                 }
@@ -536,10 +536,11 @@ struct SettingsView: View {
                     // Restore selectedModelProject from AppStorage (modelProject) if available
                     if !modelProject.isEmpty,
                        let saved = loadedProjects.first(where: { $0.id == modelProject }) {
-                        self.selectedModelProject = saved
+                        let alreadySelected = self.selectedModelProject?.id == saved.id
                         self.previousModelProject = saved  // Set previous to avoid clearing on first switch
-                        // Load model versions directly since onChange won't fire
-                        if !modelWorkspace.isEmpty {
+                        self.selectedModelProject = saved
+                        // Only call loadModelVersions directly if selection unchanged (onChange won't fire)
+                        if alreadySelected && !modelWorkspace.isEmpty {
                             loadModelVersions(workspace: modelWorkspace, project: saved.id)
                         }
                     }
@@ -565,10 +566,11 @@ struct SettingsView: View {
             do {
                 let versions = try await ModelManager.shared.listModelVersions(workspace: workspace, project: project)
                 await MainActor.run {
-                    // Ignore stale results and mismatched project (rapid A→B→A switches)
-                    guard self.loadGeneration == expectedGeneration,
-                          self.selectedModelProject?.id == project else {
-                        // Clear loading flag for abandoned Task
+                    // Ignore stale results (don't touch flag - newer load owns it)
+                    guard self.loadGeneration == expectedGeneration else { return }
+                    
+                    // Mismatched project (rapid A→B→A switches) - clear our flag
+                    guard self.selectedModelProject?.id == project else {
                         self.isLoadingVersions = false
                         return
                     }
