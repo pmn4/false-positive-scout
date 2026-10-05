@@ -299,7 +299,7 @@ struct CameraView: View {
             }
         }
         
-        let average = grayValues.reduce(0, +) / grayValues.count
+        let average = UInt8(grayValues.reduce(0) { $0 + Int($1) } / grayValues.count)
         
         var hash = Data()
         var byte: UInt8 = 0

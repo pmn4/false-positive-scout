@@ -57,13 +57,7 @@ struct FrameReviewView: View {
                                             geometry: geometry,
                                             offset: offset,
                                             index: index,
-                                            currentIndex: currentIndex,
-                                            onDelete: {
-                                                deleteFrame(frame)
-                                            },
-                                            onKeep: {
-                                                toggleKeep(frame)
-                                            }
+                                            currentIndex: currentIndex
                                         )
                                     }
                                 }
@@ -185,6 +179,11 @@ struct FrameReviewView: View {
             }
             .sheet(isPresented: $showingExportSheet) {
                 ExportSheet(frames: frameStorage.exportKeptFrames())
+            } onDismiss: {
+                // Clamp currentIndex after sheet may have deleted frames
+                if currentIndex >= frameStorage.frames.count {
+                    currentIndex = max(0, frameStorage.frames.count - 1)
+                }
             }
         }
     }
@@ -242,8 +241,6 @@ struct FrameCard: View {
     let offset: CGFloat
     let index: Int
     let currentIndex: Int
-    let onDelete: () -> Void
-    let onKeep: () -> Void
     
     var body: some View {
         VStack {
@@ -280,6 +277,7 @@ struct FrameCard: View {
 struct ExportSheet: View {
     let frames: [CapturedFrame]
     @Environment(\.dismiss) var dismiss
+    @EnvironmentObject var frameStorage: FrameStorage
     @AppStorage("scout_api_key") private var apiKey: String = ""
     @AppStorage("scout_project") private var project: String = ""
     
@@ -474,19 +472,12 @@ struct ExportSheet: View {
                     )
                 }
                 
-                do {
-                    // Upload image first
-                    let imageId = try await RoboflowService.shared.uploadImage(
-                        image: image,
-                        imageName: imageName,
-                        project: project,
-                        apiKey: apiKey
-                    )
-                    
-                    // Try to nullify
+                // Check if already uploaded (has imageId)
+                if let existingImageId = frame.uploadedImageId {
+                    // Already uploaded - only try to nullify
                     do {
                         try await RoboflowService.shared.annotateAsNull(
-                            imageId: imageId,
+                            imageId: existingImageId,
                             imageName: imageName,
                             imageWidth: Int(image.size.width),
                             imageHeight: Int(image.size.height),
@@ -500,22 +491,67 @@ struct ExportSheet: View {
                             frameStorage.deleteFrame(frame)
                         }
                     } catch {
-                        // Upload succeeded but nullify failed - partial success
+                        // Nullify failed again - add to partials
                         await MainActor.run {
                             partialSuccesses.append(PartialSuccess(
                                 frameId: frame.id,
-                                imageId: imageId,
+                                imageId: existingImageId,
                                 imageName: imageName,
                                 image: image
                             ))
                             errorMessage = error.localizedDescription
                         }
                     }
-                } catch {
-                    // Upload failed - full failure
-                    await MainActor.run {
-                        failureCount += 1
-                        errorMessage = error.localizedDescription
+                } else {
+                    // Not yet uploaded - do full upload + nullify
+                    do {
+                        // Upload image first
+                        let imageId = try await RoboflowService.shared.uploadImage(
+                            image: image,
+                            imageName: imageName,
+                            project: project,
+                            apiKey: apiKey
+                        )
+                        
+                        // Mark as uploaded
+                        await MainActor.run {
+                            frameStorage.markUploaded(frame, imageId: imageId)
+                        }
+                        
+                        // Try to nullify
+                        do {
+                            try await RoboflowService.shared.annotateAsNull(
+                                imageId: imageId,
+                                imageName: imageName,
+                                imageWidth: Int(image.size.width),
+                                imageHeight: Int(image.size.height),
+                                project: project,
+                                apiKey: apiKey
+                            )
+                            
+                            // Full success - remove from review list
+                            await MainActor.run {
+                                successCount += 1
+                                frameStorage.deleteFrame(frame)
+                            }
+                        } catch {
+                            // Upload succeeded but nullify failed - partial success
+                            await MainActor.run {
+                                partialSuccesses.append(PartialSuccess(
+                                    frameId: frame.id,
+                                    imageId: imageId,
+                                    imageName: imageName,
+                                    image: image
+                                ))
+                                errorMessage = error.localizedDescription
+                            }
+                        }
+                    } catch {
+                        // Upload failed - full failure
+                        await MainActor.run {
+                            failureCount += 1
+                            errorMessage = error.localizedDescription
+                        }
                     }
                 }
                 

@@ -55,7 +55,7 @@ When training object detection models, it's important to include negative exampl
 3. **Build and Run:**
    - Select your iPhone or simulator as the build target
    - Press `Cmd+R` to build and run
-   - Accept camera and photos permissions when prompted
+   - Accept camera permission when prompted
 
 ### Configuration
 
