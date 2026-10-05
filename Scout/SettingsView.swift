@@ -6,6 +6,8 @@ import SwiftUI
 struct SettingsView: View {
     @AppStorage("scout_model_id") private var modelId: String = ""
     @AppStorage("scout_api_key") private var apiKey: String = ""
+    @AppStorage("scout_workspace") private var workspace: String = ""
+    @AppStorage("scout_project") private var project: String = ""
     @AppStorage("scout_confidence") private var confidence: Int = 40
     
     @State private var showingApiKey = false
@@ -66,6 +68,42 @@ struct SettingsView: View {
                     .padding(.vertical, 4)
                 } header: {
                     Text("Roboflow Configuration")
+                }
+                
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Workspace")
+                            .font(.headline)
+                        
+                        TextField("my-workspace", text: $workspace)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        
+                        Text("Your Roboflow workspace name")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Project ID")
+                            .font(.headline)
+                        
+                        TextField("my-project", text: $project)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        
+                        Text("Project ID for uploading null frames")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                } header: {
+                    Text("Upload Configuration")
+                } footer: {
+                    Text("Project ID required for bulk upload & nullify. Workspace is optional (kept for future features).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
                 
                 Section {

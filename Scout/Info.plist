@@ -4,8 +4,6 @@
 <dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Scout needs camera access to capture frames for your object detection model.</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Scout needs Photos access to save captured null frames for export to Roboflow.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

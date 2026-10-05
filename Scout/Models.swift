@@ -40,13 +40,15 @@ struct CapturedFrame: Identifiable, Codable {
     let detections: [Detection]
     var imageData: Data?
     var kept: Bool
+    var uploadedImageId: String?
     
-    init(id: UUID = UUID(), timestamp: Date = Date(), detections: [Detection], imageData: Data?, kept: Bool = true) {
+    init(id: UUID = UUID(), timestamp: Date = Date(), detections: [Detection], imageData: Data?, kept: Bool = true, uploadedImageId: String? = nil) {
         self.id = id
         self.timestamp = timestamp
         self.detections = detections
         self.imageData = imageData
         self.kept = kept
+        self.uploadedImageId = uploadedImageId
     }
 }
 
@@ -66,6 +68,18 @@ class FrameStorage: ObservableObject {
     
     func deleteFrame(_ frame: CapturedFrame) {
         frames.removeAll { $0.id == frame.id }
+        
+        // Delete image file from documents
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let imagePath = documentsPath.appendingPathComponent("\(frame.id.uuidString).jpg")
+        try? FileManager.default.removeItem(at: imagePath)
+        
+        saveFrames()
+    }
+    
+    func restoreFrame(_ frame: CapturedFrame, at index: Int) {
+        let insertIndex = min(index, frames.count)
+        frames.insert(frame, at: insertIndex)
         saveFrames()
     }
     
@@ -76,7 +90,21 @@ class FrameStorage: ObservableObject {
         }
     }
     
+    func markUploaded(_ frame: CapturedFrame, imageId: String) {
+        if let index = frames.firstIndex(where: { $0.id == frame.id }) {
+            frames[index].uploadedImageId = imageId
+            saveFrames()
+        }
+    }
+    
     func clearAll() {
+        // Delete all image files from documents
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        for frame in frames {
+            let imagePath = documentsPath.appendingPathComponent("\(frame.id.uuidString).jpg")
+            try? FileManager.default.removeItem(at: imagePath)
+        }
+        
         frames.removeAll()
         saveFrames()
     }
@@ -93,7 +121,8 @@ class FrameStorage: ObservableObject {
                 timestamp: frame.timestamp,
                 detections: frame.detections,
                 imageData: nil,
-                kept: frame.kept
+                kept: frame.kept,
+                uploadedImageId: frame.uploadedImageId
             )
         }
         
@@ -127,7 +156,8 @@ class FrameStorage: ObservableObject {
                 timestamp: frame.timestamp,
                 detections: frame.detections,
                 imageData: imageData,
-                kept: frame.kept
+                kept: frame.kept,
+                uploadedImageId: frame.uploadedImageId
             )
         }
     }

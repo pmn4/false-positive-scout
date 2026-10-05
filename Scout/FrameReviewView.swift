@@ -3,12 +3,25 @@ import SwiftUI
 // "The bridge is over, the bridge is over" - Nas (probably)
 // Fast swipe-through review interface for captured frames
 
+// "Rewind like a VHS, back to the essence" ~Nas (probably)
+// Undo support for review actions
+struct ReviewAction {
+    enum ActionType {
+        case delete(frame: CapturedFrame, index: Int)
+        case toggleKeep(frameId: UUID, previousState: Bool)
+    }
+    
+    let type: ActionType
+    let timestamp: Date
+}
+
 struct FrameReviewView: View {
     @EnvironmentObject var frameStorage: FrameStorage
     @State private var currentIndex = 0
     @State private var offset: CGFloat = 0
     @State private var showingDeleteAlert = false
     @State private var showingExportSheet = false
+    @State private var undoStack: [ReviewAction] = []
     
     var body: some View {
         NavigationView {
@@ -44,13 +57,7 @@ struct FrameReviewView: View {
                                             geometry: geometry,
                                             offset: offset,
                                             index: index,
-                                            currentIndex: currentIndex,
-                                            onDelete: {
-                                                deleteFrame(frame)
-                                            },
-                                            onKeep: {
-                                                frameStorage.toggleKeep(frame)
-                                            }
+                                            currentIndex: currentIndex
                                         )
                                     }
                                 }
@@ -107,7 +114,7 @@ struct FrameReviewView: View {
                                     }
                                     
                                     Button(action: {
-                                        frameStorage.toggleKeep(frame)
+                                        toggleKeep(frame)
                                     }) {
                                         Label(
                                             frame.kept ? "Kept" : "Discarded",
@@ -130,12 +137,22 @@ struct FrameReviewView: View {
             .navigationTitle("Review")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: {
+                        performUndo()
+                    }) {
+                        Image(systemName: "arrow.uturn.backward.circle")
+                            .font(.title3)
+                    }
+                    .disabled(undoStack.isEmpty)
+                }
+                
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
                         Button(action: {
                             showingExportSheet = true
                         }) {
-                            Label("Export Kept Frames", systemImage: "square.and.arrow.up")
+                            Label("Upload & Nullify", systemImage: "square.and.arrow.up")
                         }
                         .disabled(frameStorage.exportKeptFrames().isEmpty)
                         
@@ -154,21 +171,66 @@ struct FrameReviewView: View {
                 Button("Cancel", role: .cancel) { }
                 Button("Clear", role: .destructive) {
                     frameStorage.clearAll()
+                    undoStack.removeAll()
                     currentIndex = 0
                 }
             } message: {
                 Text("This will delete all captured frames. This cannot be undone.")
             }
-            .sheet(isPresented: $showingExportSheet) {
+            .sheet(isPresented: $showingExportSheet, onDismiss: {
+                // Clamp currentIndex after sheet may have deleted frames
+                if currentIndex >= frameStorage.frames.count {
+                    currentIndex = max(0, frameStorage.frames.count - 1)
+                }
+            }) {
                 ExportSheet(frames: frameStorage.exportKeptFrames())
             }
         }
     }
     
     private func deleteFrame(_ frame: CapturedFrame) {
+        guard let index = frameStorage.frames.firstIndex(where: { $0.id == frame.id }) else {
+            return
+        }
+        
+        // Record action for undo
+        let action = ReviewAction(
+            type: .delete(frame: frame, index: index),
+            timestamp: Date()
+        )
+        undoStack.append(action)
+        
         frameStorage.deleteFrame(frame)
         if currentIndex >= frameStorage.frames.count {
             currentIndex = max(0, frameStorage.frames.count - 1)
+        }
+    }
+    
+    private func toggleKeep(_ frame: CapturedFrame) {
+        // Record action for undo
+        let action = ReviewAction(
+            type: .toggleKeep(frameId: frame.id, previousState: frame.kept),
+            timestamp: Date()
+        )
+        undoStack.append(action)
+        
+        frameStorage.toggleKeep(frame)
+    }
+    
+    private func performUndo() {
+        guard let lastAction = undoStack.popLast() else { return }
+        
+        switch lastAction.type {
+        case .delete(let frame, let index):
+            frameStorage.restoreFrame(frame, at: index)
+            currentIndex = min(index, frameStorage.frames.count - 1)
+            
+        case .toggleKeep(let frameId, let previousState):
+            if let frame = frameStorage.frames.first(where: { $0.id == frameId }) {
+                if frame.kept != previousState {
+                    frameStorage.toggleKeep(frame)
+                }
+            }
         }
     }
 }
@@ -179,8 +241,6 @@ struct FrameCard: View {
     let offset: CGFloat
     let index: Int
     let currentIndex: Int
-    let onDelete: () -> Void
-    let onKeep: () -> Void
     
     var body: some View {
         VStack {
@@ -217,69 +277,339 @@ struct FrameCard: View {
 struct ExportSheet: View {
     let frames: [CapturedFrame]
     @Environment(\.dismiss) var dismiss
-    @State private var isExporting = false
+    @EnvironmentObject var frameStorage: FrameStorage
+    @AppStorage("scout_api_key") private var apiKey: String = ""
+    @AppStorage("scout_project") private var project: String = ""
+    
+    // "Half real, half incredible, like a myth that's legible" ~Nas (probably)
+    // Track upload state for retry
+    struct PartialSuccess: Identifiable {
+        let id = UUID()
+        let frameId: UUID
+        let imageId: String
+        let imageName: String
+        let image: UIImage
+    }
+    
+    @State private var isUploading = false
+    @State private var uploadProgress: UploadProgress?
+    @State private var errorMessage: String?
+    @State private var uploadComplete = false
+    @State private var successCount = 0
+    @State private var failureCount = 0
+    @State private var partialSuccesses: [PartialSuccess] = []
+    @State private var isRetrying = false
     
     var body: some View {
         NavigationView {
             VStack(spacing: 20) {
-                Image(systemName: "square.and.arrow.up")
-                    .font(.system(size: 60))
-                    .foregroundColor(.blue)
-                
-                Text("\(frames.count) frame\(frames.count != 1 ? "s" : "") ready to export")
-                    .font(.title2)
-                
-                Text("Save these null frames to your Photos library, then upload them to Roboflow to improve your model.")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                if uploadComplete {
+                    Image(systemName: failureCount == 0 && partialSuccesses.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .font(.system(size: 60))
+                        .foregroundColor(failureCount == 0 && partialSuccesses.isEmpty ? .green : .orange)
+                    
+                    Text(failureCount == 0 && partialSuccesses.isEmpty ? "Upload Complete!" : "Upload Finished")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    
+                    VStack(spacing: 12) {
+                        if successCount > 0 {
+                            Text("✓ \(successCount) frame\(successCount != 1 ? "s" : "") uploaded & marked as null")
+                                .font(.subheadline)
+                                .foregroundColor(.green)
+                        }
+                        
+                        if !partialSuccesses.isEmpty {
+                            VStack(spacing: 8) {
+                                Text("⚠️ \(partialSuccesses.count) frame\(partialSuccesses.count != 1 ? "s" : "") uploaded but nullify failed")
+                                    .font(.subheadline)
+                                    .foregroundColor(.orange)
+                                
+                                Text("Images are in Roboflow but not marked as null. You can mark them as Null in the Roboflow UI, or retry below.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                
+                                Button(action: {
+                                    retryNullify()
+                                }) {
+                                    Text(isRetrying ? "Retrying..." : "Retry Nullify")
+                                        .font(.subheadline)
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 20)
+                                        .padding(.vertical, 8)
+                                        .background(Color.orange)
+                                        .cornerRadius(8)
+                                }
+                                .disabled(isRetrying)
+                            }
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
+                            .background(Color.orange.opacity(0.1))
+                            .cornerRadius(12)
+                        }
+                        
+                        if failureCount > 0 {
+                            Text("✗ \(failureCount) frame\(failureCount != 1 ? "s" : "") failed to upload")
+                                .font(.subheadline)
+                                .foregroundColor(.red)
+                        }
+                        
+                        if let error = errorMessage, (failureCount > 0 || !partialSuccesses.isEmpty) {
+                            Text("Last error: \(error)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.top, 4)
+                        }
+                    }
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
-                
-                Button(action: {
-                    exportFrames()
-                }) {
-                    Text(isExporting ? "Saving..." : "Save to Photos")
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.blue)
-                        .cornerRadius(12)
+                } else {
+                    Image(systemName: "cloud.fill")
+                        .font(.system(size: 60))
+                        .foregroundColor(.blue)
+                    
+                    Text("\(frames.count) frame\(frames.count != 1 ? "s" : "") ready to upload")
+                        .font(.title2)
+                    
+                    Text("Upload these null frames to Roboflow and mark them as negative examples.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    
+                    if let progress = uploadProgress {
+                        VStack(spacing: 12) {
+                            ProgressView(value: progress.percentage) {
+                                Text("Uploading \(progress.current) of \(progress.total)")
+                                    .font(.subheadline)
+                            }
+                            .progressViewStyle(.linear)
+                            
+                            Text(progress.currentImageName)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal)
+                    }
+                    
+                    if let error = errorMessage {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                    }
+                    
+                    if apiKey.isEmpty || project.isEmpty {
+                        Text("⚠️ Configure API Key and Project ID in Settings")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                    }
+                    
+                    Button(action: {
+                        uploadFrames()
+                    }) {
+                        Text(isUploading ? "Uploading..." : "Upload & Nullify")
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(isUploading || apiKey.isEmpty || project.isEmpty ? Color.gray : Color.blue)
+                            .cornerRadius(12)
+                    }
+                    .disabled(isUploading || apiKey.isEmpty || project.isEmpty)
+                    .padding(.horizontal)
                 }
-                .disabled(isExporting)
-                .padding(.horizontal)
                 
                 Spacer()
             }
             .padding()
-            .navigationTitle("Export Frames")
+            .navigationTitle("Upload & Nullify")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
+                    Button(uploadComplete ? "Done" : "Cancel") {
                         dismiss()
                     }
+                    .disabled(isUploading || isRetrying)
                 }
             }
         }
     }
     
-    private func exportFrames() {
-        isExporting = true
+    private func uploadFrames() {
+        guard !project.isEmpty, !apiKey.isEmpty else {
+            errorMessage = "Missing configuration"
+            return
+        }
+        
+        isUploading = true
+        errorMessage = nil
+        successCount = 0
+        failureCount = 0
+        partialSuccesses = []
         
         Task {
-            for frame in frames {
+            for (index, frame) in frames.enumerated() {
                 guard let imageData = frame.imageData,
                       let image = UIImage(data: imageData) else {
+                    await MainActor.run {
+                        failureCount += 1
+                    }
                     continue
                 }
                 
-                UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-                try? await Task.sleep(nanoseconds: 100_000_000)
+                let imageName = "null_\(frame.id.uuidString).jpg"
+                
+                await MainActor.run {
+                    uploadProgress = UploadProgress(
+                        current: index + 1,
+                        total: frames.count,
+                        currentImageName: imageName
+                    )
+                }
+                
+                // Check if already uploaded (has imageId)
+                if let existingImageId = frame.uploadedImageId {
+                    // Already uploaded - only try to nullify
+                    do {
+                        try await RoboflowService.shared.annotateAsNull(
+                            imageId: existingImageId,
+                            imageName: imageName,
+                            imageWidth: Int(image.size.width),
+                            imageHeight: Int(image.size.height),
+                            project: project,
+                            apiKey: apiKey
+                        )
+                        
+                        // Full success - remove from review list
+                        await MainActor.run {
+                            successCount += 1
+                            frameStorage.deleteFrame(frame)
+                        }
+                    } catch {
+                        // Nullify failed again - add to partials
+                        await MainActor.run {
+                            partialSuccesses.append(PartialSuccess(
+                                frameId: frame.id,
+                                imageId: existingImageId,
+                                imageName: imageName,
+                                image: image
+                            ))
+                            errorMessage = error.localizedDescription
+                        }
+                    }
+                } else {
+                    // Not yet uploaded - do full upload + nullify
+                    do {
+                        // Upload image first
+                        let imageId = try await RoboflowService.shared.uploadImage(
+                            image: image,
+                            imageName: imageName,
+                            project: project,
+                            apiKey: apiKey
+                        )
+                        
+                        // Mark as uploaded
+                        await MainActor.run {
+                            frameStorage.markUploaded(frame, imageId: imageId)
+                        }
+                        
+                        // Try to nullify
+                        do {
+                            try await RoboflowService.shared.annotateAsNull(
+                                imageId: imageId,
+                                imageName: imageName,
+                                imageWidth: Int(image.size.width),
+                                imageHeight: Int(image.size.height),
+                                project: project,
+                                apiKey: apiKey
+                            )
+                            
+                            // Full success - remove from review list
+                            await MainActor.run {
+                                successCount += 1
+                                frameStorage.deleteFrame(frame)
+                            }
+                        } catch {
+                            // Upload succeeded but nullify failed - partial success
+                            await MainActor.run {
+                                partialSuccesses.append(PartialSuccess(
+                                    frameId: frame.id,
+                                    imageId: imageId,
+                                    imageName: imageName,
+                                    image: image
+                                ))
+                                errorMessage = error.localizedDescription
+                            }
+                        }
+                    } catch {
+                        // Upload failed - full failure
+                        await MainActor.run {
+                            failureCount += 1
+                            errorMessage = error.localizedDescription
+                        }
+                    }
+                }
+                
+                try? await Task.sleep(nanoseconds: 500_000_000)
             }
             
             await MainActor.run {
-                isExporting = false
-                dismiss()
+                isUploading = false
+                uploadComplete = true
+            }
+        }
+    }
+    
+    private func retryNullify() {
+        guard !partialSuccesses.isEmpty else { return }
+        
+        isRetrying = true
+        errorMessage = nil
+        
+        let toRetry = partialSuccesses
+        
+        Task {
+            var remainingFailures: [PartialSuccess] = []
+            var retrySuccesses = 0
+            
+            for partial in toRetry {
+                do {
+                    try await RoboflowService.shared.annotateAsNull(
+                        imageId: partial.imageId,
+                        imageName: partial.imageName,
+                        imageWidth: Int(partial.image.size.width),
+                        imageHeight: Int(partial.image.size.height),
+                        project: project,
+                        apiKey: apiKey
+                    )
+                    
+                    retrySuccesses += 1
+                    
+                    // Remove from review list on full success
+                    await MainActor.run {
+                        if let frame = frameStorage.frames.first(where: { $0.id == partial.frameId }) {
+                            frameStorage.deleteFrame(frame)
+                        }
+                    }
+                } catch {
+                    remainingFailures.append(partial)
+                    await MainActor.run {
+                        errorMessage = error.localizedDescription
+                    }
+                }
+                
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            
+            await MainActor.run {
+                successCount += retrySuccesses
+                partialSuccesses = remainingFailures
+                isRetrying = false
             }
         }
     }
