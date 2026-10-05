@@ -1,6 +1,7 @@
 import Foundation
 import AuthenticationServices
 import CryptoKit
+import UIKit
 
 // "It ain't hard to tell, I excel, then prevail" ~Nas (probably)
 // OAuth 2.1 flow with PKCE for Roboflow authentication
@@ -230,7 +231,9 @@ class OAuthManager: NSObject, ObservableObject {
         
         // Store tokens securely in keychain
         saveToKeychain(key: accessTokenKey, value: tokenResponse.access_token)
-        saveToKeychain(key: refreshTokenKey, value: tokenResponse.refresh_token)
+        if let refreshToken = tokenResponse.refresh_token {
+            saveToKeychain(key: refreshTokenKey, value: refreshToken)
+        }
         
         // Calculate and store expiry time (access tokens valid for 1 hour)
         let expiryDate = Date().addingTimeInterval(TimeInterval(tokenResponse.expires_in ?? 3600))
@@ -355,7 +358,8 @@ class OAuthManager: NSObject, ObservableObject {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key,
-            kSecValueData as String: data
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
         
         SecItemDelete(query as CFDictionary)

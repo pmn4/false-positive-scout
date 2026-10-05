@@ -280,7 +280,7 @@ struct ExportSheet: View {
     @EnvironmentObject var frameStorage: FrameStorage
     @ObservedObject var oauthManager = OAuthManager.shared
     @AppStorage("scout_project") private var project: String = ""
-    @AppStorage("scout_api_key") private var apiKey: String = ""
+    @State private var apiKey: String = ""  // Load from Keychain
     
     // "Half real, half incredible, like a myth that's legible" ~Nas (probably)
     // Track upload state for retry
@@ -439,6 +439,10 @@ struct ExportSheet: View {
                     .disabled(isUploading || isRetrying)
                 }
             }
+        }
+        .onAppear {
+            // Load API key from Keychain (not UserDefaults)
+            apiKey = KeychainHelper.loadAPIKey() ?? ""
         }
     }
     

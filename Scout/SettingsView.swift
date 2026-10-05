@@ -18,6 +18,7 @@ struct SettingsView: View {
     @State private var workspaces: [Workspace] = []
     @State private var projects: [Project] = []
     @State private var selectedWorkspace: Workspace?
+    @State private var previousWorkspace: Workspace?  // Track previous to detect real changes
     @State private var selectedModelProject: Project?
     @State private var modelVersions: [ModelVersion] = []
     @State private var isLoadingProjects = false
@@ -178,21 +179,32 @@ struct SettingsView: View {
                                     }
                                 }
                                 .onChange(of: selectedWorkspace) { newWorkspace in
-                                    // Clear upload project, model project/version, and loaded model when workspace changes
-                                    projects = []
-                                    project = ""
-                                    selectedModelProject = nil
-                                    modelProject = ""
-                                    modelVersion = ""
-                                    modelVersions = []
-                                    modelManager.currentModel = nil
-                                    modelManager.currentVNCoreMLModel = nil
-                                    modelManager.loadedWorkspace = nil
-                                    modelManager.loadedProject = nil
-                                    modelManager.loadedVersion = nil
+                                    // Only clear state on real user-driven workspace change, not first populate
+                                    let isRealChange = previousWorkspace != nil && previousWorkspace?.url != newWorkspace?.url
+                                    
+                                    if isRealChange {
+                                        // Clear upload project, model project/version, and loaded model
+                                        projects = []
+                                        project = ""
+                                        selectedModelProject = nil
+                                        modelProject = ""
+                                        modelVersion = ""
+                                        modelVersions = []
+                                        modelManager.currentModel = nil
+                                        modelManager.currentVNCoreMLModel = nil
+                                        modelManager.loadedWorkspace = nil
+                                        modelManager.loadedProject = nil
+                                        modelManager.loadedVersion = nil
+                                    }
+                                    
+                                    previousWorkspace = newWorkspace
                                     
                                     if let workspace = newWorkspace {
                                         loadProjects(workspace: workspace.url)
+                                    } else if isRealChange {
+                                        // Only clear projects list if it's a real change to nil
+                                        projects = []
+                                        project = ""
                                     }
                                 }
                             }
@@ -537,7 +549,8 @@ struct KeychainHelper {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: apiKeyKey,
-            kSecValueData as String: data
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
         
         // Delete any existing item first

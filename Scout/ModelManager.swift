@@ -139,8 +139,14 @@ class ModelManager: ObservableObject {
         let pathExtension = tempURL.pathExtension.lowercased()
         let isZip = pathExtension == "zip"
         
-        // Check for zip magic bytes if extension is ambiguous
-        let isZipByContent = !isZip && (try? Data(contentsOf: tempURL).prefix(2)) == Data([0x50, 0x4B])
+        // Check for zip magic bytes if extension is ambiguous (read only first 2 bytes)
+        var isZipByContent = false
+        if !isZip, let fileHandle = try? FileHandle(forReadingFrom: tempURL) {
+            defer { try? fileHandle.close() }
+            if let header = try? fileHandle.read(upToCount: 2), header.count == 2 {
+                isZipByContent = (header == Data([0x50, 0x4B]))  // "PK" magic bytes
+            }
+        }
         
         if isZip || isZipByContent {
             // Core ML models packaged as .zip require unzipping

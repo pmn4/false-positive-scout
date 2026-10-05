@@ -5,8 +5,6 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var frameStorage: FrameStorage
-    @AppStorage("scout_model_id") private var modelId: String = ""
-    @AppStorage("scout_api_key") private var apiKey: String = ""
     @AppStorage("scout_confidence") private var confidence: Int = 40
     
     @State private var selectedTab = 0
