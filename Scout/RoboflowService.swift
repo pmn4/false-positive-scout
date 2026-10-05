@@ -48,14 +48,25 @@ class RoboflowService {
     }
     
     private func getAuthMethod(apiKey: String? = nil) async throws -> AuthMethod {
-        // If OAuth is active (signed in), use it exclusively - do not fall back to API key
+        // If OAuth is active (signed in), try it first
         if OAuthManager.shared.isAuthenticated {
-            // Propagate OAuth token failures (will trigger sign out if expired)
-            let token = try await OAuthManager.shared.getAccessToken()
-            return .oauth(token: token)
+            do {
+                // Propagate OAuth token failures (will trigger sign out if expired)
+                let token = try await OAuthManager.shared.getAccessToken()
+                return .oauth(token: token)
+            } catch {
+                // Re-check isAuthenticated: getAccessToken may have signedOut on refresh 400/401
+                // If signed out, fall through to API key; if still authenticated (5xx/429), rethrow
+                if !OAuthManager.shared.isAuthenticated {
+                    // Fall through to API key path (self-signOut on expired refresh token)
+                } else {
+                    // Still authenticated: temporary error (5xx, 429), propagate
+                    throw error
+                }
+            }
         }
         
-        // Only use API key when NOT signed in with OAuth
+        // Only use API key when NOT signed in with OAuth (or after self-signOut)
         if let key = apiKey, !key.isEmpty {
             return .apiKey(key: key)
         }
