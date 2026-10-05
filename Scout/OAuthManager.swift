@@ -324,8 +324,13 @@ class OAuthManager: NSObject, ObservableObject {
         // Consider authenticated only if we have access token AND (refresh token OR expiry tracking)
         let isUsableSession = hasAccessToken && (hasRefreshToken || hasExpiry)
         
-        DispatchQueue.main.async {
+        // Set flag synchronously (not deferred async) so Settings onAppear sees it immediately
+        if Thread.isMainThread {
             self.isAuthenticated = isUsableSession
+        } else {
+            DispatchQueue.main.sync {
+                self.isAuthenticated = isUsableSession
+            }
         }
     }
     

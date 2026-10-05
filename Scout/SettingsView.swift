@@ -200,6 +200,7 @@ struct SettingsView: View {
                                         modelProject = ""
                                         modelVersion = ""
                                         modelVersions = []
+                                        isLoadingVersions = false
                                         modelManager.currentModel = nil
                                         modelManager.currentVNCoreMLModel = nil
                                         modelManager.loadedWorkspace = nil
@@ -288,6 +289,8 @@ struct SettingsView: View {
                                     modelVersion = ""
                                     modelProject = ""
                                     modelWorkspace = ""
+                                    isLoadingVersions = false
+                                    loadGeneration += 1  // Cancel in-flight version load
                                     modelManager.currentModel = nil
                                     modelManager.currentVNCoreMLModel = nil
                                 }
@@ -475,11 +478,17 @@ struct SettingsView: View {
     
     private func loadWorkspacesAndProjects() {
         loadError = nil
+        loadGeneration += 1
+        let expectedGeneration = loadGeneration
         
         Task {
             do {
                 let loadedWorkspaces = try await RoboflowService.shared.listWorkspaces()
                 await MainActor.run {
+                    // Ignore stale results from canceled/superseded load (e.g. after Sign Out)
+                    guard self.loadGeneration == expectedGeneration,
+                          self.oauthManager.isAuthenticated else { return }
+                    
                     self.workspaces = loadedWorkspaces
                     
                     // Restore selectedWorkspace from AppStorage (modelWorkspace) if available
@@ -496,6 +505,7 @@ struct SettingsView: View {
                 }
             } catch {
                 await MainActor.run {
+                    guard self.loadGeneration == expectedGeneration else { return }
                     loadError = error.localizedDescription
                 }
             }
@@ -536,6 +546,8 @@ struct SettingsView: View {
                 }
             } catch {
                 await MainActor.run {
+                    // Ignore stale errors from canceled/superseded load
+                    guard self.loadGeneration == expectedGeneration else { return }
                     self.isLoadingProjects = false
                     self.loadError = error.localizedDescription
                 }
@@ -555,7 +567,11 @@ struct SettingsView: View {
                 await MainActor.run {
                     // Ignore stale results and mismatched project (rapid A→B→A switches)
                     guard self.loadGeneration == expectedGeneration,
-                          self.selectedModelProject?.id == project else { return }
+                          self.selectedModelProject?.id == project else {
+                        // Clear loading flag for abandoned Task
+                        self.isLoadingVersions = false
+                        return
+                    }
                     
                     self.modelVersions = versions
                     self.isLoadingVersions = false
