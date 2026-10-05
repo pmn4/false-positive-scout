@@ -20,6 +20,7 @@ struct SettingsView: View {
     @State private var selectedWorkspace: Workspace?
     @State private var previousWorkspace: Workspace?  // Track previous to detect real changes
     @State private var selectedModelProject: Project?
+    @State private var previousModelProject: Project?  // Track previous to detect real changes
     @State private var modelVersions: [ModelVersion] = []
     @State private var isLoadingProjects = false
     @State private var isLoadingVersions = false
@@ -257,18 +258,27 @@ struct SettingsView: View {
                                 }
                             }
                             .onChange(of: selectedModelProject) { newProject in
+                                // Only clear state on real project change, not first populate
+                                let isRealChange = previousModelProject != nil && previousModelProject?.id != newProject?.id
+                                
                                 if let proj = newProject, let ws = selectedWorkspace {
                                     modelProject = proj.id
                                     modelWorkspace = ws.url
-                                    // Clear stale model version/loaded model when project changes
-                                    modelVersion = ""
-                                    modelManager.currentModel = nil
-                                    modelManager.currentVNCoreMLModel = nil
+                                    
+                                    // Only clear when project ID actually changes
+                                    if isRealChange {
+                                        modelVersion = ""
+                                        modelManager.currentModel = nil
+                                        modelManager.currentVNCoreMLModel = nil
+                                    }
+                                    
                                     loadModelVersions(workspace: ws.url, project: proj.id)
-                                } else {
+                                } else if isRealChange {
                                     modelVersions = []
                                     modelVersion = ""
                                 }
+                                
+                                previousModelProject = newProject
                             }
                             
                             if isLoadingVersions {
@@ -457,7 +467,13 @@ struct SettingsView: View {
                 let loadedWorkspaces = try await RoboflowService.shared.listWorkspaces()
                 await MainActor.run {
                     self.workspaces = loadedWorkspaces
-                    if let first = loadedWorkspaces.first {
+                    
+                    // Restore selectedWorkspace from AppStorage (modelWorkspace) if available
+                    if !modelWorkspace.isEmpty,
+                       let saved = loadedWorkspaces.first(where: { $0.url == modelWorkspace }) {
+                        self.selectedWorkspace = saved
+                        loadProjects(workspace: saved.url)
+                    } else if let first = loadedWorkspaces.first {
                         self.selectedWorkspace = first
                         loadProjects(workspace: first.url)
                     }
@@ -481,8 +497,15 @@ struct SettingsView: View {
                     self.projects = loadedProjects
                     self.isLoadingProjects = false
                     
+                    // Restore upload project if empty
                     if !loadedProjects.isEmpty && project.isEmpty {
                         self.project = loadedProjects[0].id
+                    }
+                    
+                    // Restore selectedModelProject from AppStorage (modelProject) if available
+                    if !modelProject.isEmpty,
+                       let saved = loadedProjects.first(where: { $0.id == modelProject }) {
+                        self.selectedModelProject = saved
                     }
                 }
             } catch {
@@ -546,18 +569,22 @@ struct KeychainHelper {
     
     static func saveAPIKey(_ key: String) {
         let data = key.data(using: .utf8)!
-        let query: [String: Any] = [
+        
+        // Delete query: only class + account (no value)
+        let deleteQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: apiKeyKey
+        ]
+        SecItemDelete(deleteQuery as CFDictionary)
+        
+        // Add query: class + account + value + accessibility
+        let addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: apiKeyKey,
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
-        
-        // Delete any existing item first
-        SecItemDelete(query as CFDictionary)
-        
-        // Add new item
-        SecItemAdd(query as CFDictionary, nil)
+        SecItemAdd(addQuery as CFDictionary, nil)
     }
     
     static func loadAPIKey() -> String? {
@@ -570,13 +597,22 @@ struct KeychainHelper {
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let key = String(data: data, encoding: .utf8) else {
-            return nil
+        if status == errSecSuccess,
+           let data = result as? Data,
+           let key = String(data: data, encoding: .utf8) {
+            return key
         }
         
-        return key
+        // One-time migration: check UserDefaults for old API key
+        if let oldKey = UserDefaults.standard.string(forKey: apiKeyKey), !oldKey.isEmpty {
+            // Migrate to Keychain
+            saveAPIKey(oldKey)
+            // Remove from UserDefaults
+            UserDefaults.standard.removeObject(forKey: apiKeyKey)
+            return oldKey
+        }
+        
+        return nil
     }
     
     static func deleteAPIKey() {

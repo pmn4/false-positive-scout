@@ -154,13 +154,19 @@ class ModelManager: ObservableObject {
             throw ModelError.zipNotSupported
         }
         
+        // URLSession temp files are often extensionless; add .mlmodel extension before compile
+        let tempWithExtension = tempURL.deletingLastPathComponent()
+            .appendingPathComponent(tempURL.lastPathComponent)
+            .appendingPathExtension("mlmodel")
+        try fileManager.moveItem(at: tempURL, to: tempWithExtension)
+        
         // Compile the model (creates .mlmodelc)
         let cacheDir = getCacheDirectory()
         if !fileManager.fileExists(atPath: cacheDir.path) {
             try fileManager.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         }
         
-        let compiledURL = try MLModel.compileModel(at: tempURL)
+        let compiledURL = try MLModel.compileModel(at: tempWithExtension)
         
         // Move compiled model to cache
         if fileManager.fileExists(atPath: cacheURL.path) {

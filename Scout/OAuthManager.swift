@@ -112,7 +112,14 @@ class OAuthManager: NSObject, ObservableObject {
                 
                 self.authSession?.presentationContextProvider = self
                 self.authSession?.prefersEphemeralWebBrowserSession = false
-                self.authSession?.start()
+                
+                // start() returns false if session couldn't be started
+                if self.authSession?.start() == false {
+                    // Clear PKCE session state
+                    self.currentVerifier = nil
+                    self.currentState = nil
+                    continuation.resume(throwing: OAuthError.authorizationFailed("Failed to start authentication session"))
+                }
             }
         }
     }
@@ -355,15 +362,21 @@ class OAuthManager: NSObject, ObservableObject {
     private func saveToKeychain(key: String, value: String) {
         let data = Data(value.utf8)
         
-        let query: [String: Any] = [
+        // Delete query: only class + account (no value)
+        let deleteQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key
+        ]
+        SecItemDelete(deleteQuery as CFDictionary)
+        
+        // Add query: class + account + value + accessibility
+        let addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key,
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
-        
-        SecItemDelete(query as CFDictionary)
-        SecItemAdd(query as CFDictionary, nil)
+        SecItemAdd(addQuery as CFDictionary, nil)
     }
     
     private func getFromKeychain(key: String) -> String? {
