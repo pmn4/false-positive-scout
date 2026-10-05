@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Scout needs camera access to capture frames for your object detection model.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Scout needs Photos access to save captured null frames for export to Roboflow.</string>
+	<key>UILaunchScreen</key>
+	<dict/>
+</dict>
+</plist>
