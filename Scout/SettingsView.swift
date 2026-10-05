@@ -189,11 +189,13 @@ struct SettingsView: View {
                                     }
                                 }
                                 .onChange(of: selectedWorkspace) { newWorkspace in
-                                    // Only clear state on real user-driven workspace change, not first populate
-                                    let isRealChange = previousWorkspace != nil && previousWorkspace?.url != newWorkspace?.url
+                                    // Detect selection changes: previous?.url != new?.url (includes nil→value, value→different, value→nil)
+                                    let urlChanged = previousWorkspace?.url != newWorkspace?.url
+                                    // Real change: previous was non-nil (user switching, not first populate/restore)
+                                    let isRealChange = previousWorkspace != nil && urlChanged
                                     
                                     if isRealChange {
-                                        // Clear upload project, model project/version, and loaded model
+                                        // Clear upload project, model project/version, and loaded model (only on real user-driven change)
                                         projects = []
                                         project = ""
                                         selectedModelProject = nil
@@ -210,8 +212,8 @@ struct SettingsView: View {
                                     
                                     previousWorkspace = newWorkspace
                                     
-                                    // Only fetch/clear on real change (not on restore/populate)
-                                    if isRealChange {
+                                    // Fetch on any ID change (nil→value, value→different, value→nil), not on no-op restore
+                                    if urlChanged {
                                         if let workspace = newWorkspace {
                                             loadProjects(workspace: workspace.url)
                                         } else {
@@ -271,30 +273,36 @@ struct SettingsView: View {
                                 }
                             }
                             .onChange(of: selectedModelProject) { newProject in
-                                // Only clear state on real project change, not first populate
-                                let isRealChange = previousModelProject != nil && previousModelProject?.id != newProject?.id
+                                // Detect selection changes: previous?.id != new?.id (includes nil→value, value→different, value→nil)
+                                let idChanged = previousModelProject?.id != newProject?.id
+                                // Real change: previous was non-nil (user switching, not first populate/restore)
+                                let isRealChange = previousModelProject != nil && idChanged
                                 
                                 if let proj = newProject, let ws = selectedWorkspace {
                                     modelProject = proj.id
                                     modelWorkspace = ws.url
                                     
-                                    // Only fetch/clear on real change (not on restore/populate)
+                                    // Clear model state on real change; fetch on any ID change (nil→value, value→different)
                                     if isRealChange {
                                         modelVersion = ""
                                         modelManager.currentModel = nil
                                         modelManager.currentVNCoreMLModel = nil
+                                    }
+                                    if idChanged {
                                         loadModelVersions(workspace: ws.url, project: proj.id)
                                     }
-                                } else if isRealChange {
-                                    // Deselecting project: clear versions and unload model (mirror non-nil clear)
+                                } else if idChanged {
+                                    // Deselecting project or clearing: clear versions and unload model
                                     modelVersions = []
                                     modelVersion = ""
                                     modelProject = ""
                                     modelWorkspace = ""
                                     isLoadingVersions = false
                                     // Don't bump loadGeneration (races loadProjects and can stick isLoadingProjects)
-                                    modelManager.currentModel = nil
-                                    modelManager.currentVNCoreMLModel = nil
+                                    if isRealChange {
+                                        modelManager.currentModel = nil
+                                        modelManager.currentVNCoreMLModel = nil
+                                    }
                                 }
                                 
                                 previousModelProject = newProject
