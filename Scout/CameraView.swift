@@ -172,7 +172,7 @@ struct CameraView: View {
     
     private func startRecording() {
         isRecording = true
-        lastCaptureTime = Date()
+        lastCaptureTime = nil
         lastSavedImage = nil
     }
     

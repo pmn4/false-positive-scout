@@ -177,6 +177,7 @@ struct FrameReviewView: View {
                 Button("Cancel", role: .cancel) { }
                 Button("Clear", role: .destructive) {
                     frameStorage.clearAll()
+                    undoStack.removeAll()
                     currentIndex = 0
                 }
             } message: {
@@ -288,24 +289,43 @@ struct ExportSheet: View {
     @State private var errorMessage: String?
     @State private var uploadComplete = false
     @State private var successCount = 0
+    @State private var failureCount = 0
     
     var body: some View {
         NavigationView {
             VStack(spacing: 20) {
                 if uploadComplete {
-                    Image(systemName: "checkmark.circle.fill")
+                    Image(systemName: failureCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                         .font(.system(size: 60))
-                        .foregroundColor(.green)
+                        .foregroundColor(failureCount == 0 ? .green : .orange)
                     
-                    Text("Upload Complete!")
+                    Text(failureCount == 0 ? "Upload Complete!" : "Upload Finished with Errors")
                         .font(.title2)
                         .fontWeight(.bold)
                     
-                    Text("\(successCount) frame\(successCount != 1 ? "s" : "") uploaded and marked as null")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
+                    VStack(spacing: 8) {
+                        if successCount > 0 {
+                            Text("✓ \(successCount) frame\(successCount != 1 ? "s" : "") uploaded and marked as null")
+                                .font(.subheadline)
+                                .foregroundColor(.green)
+                        }
+                        
+                        if failureCount > 0 {
+                            Text("✗ \(failureCount) frame\(failureCount != 1 ? "s" : "") failed to upload")
+                                .font(.subheadline)
+                                .foregroundColor(.red)
+                        }
+                        
+                        if let error = errorMessage, failureCount > 0 {
+                            Text("Last error: \(error)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.top, 4)
+                        }
+                    }
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
                 } else {
                     Image(systemName: "cloud.fill")
                         .font(.system(size: 60))
@@ -391,11 +411,15 @@ struct ExportSheet: View {
         isUploading = true
         errorMessage = nil
         successCount = 0
+        failureCount = 0
         
         Task {
             for (index, frame) in frames.enumerated() {
                 guard let imageData = frame.imageData,
                       let image = UIImage(data: imageData) else {
+                    await MainActor.run {
+                        failureCount += 1
+                    }
                     continue
                 }
                 
@@ -423,6 +447,7 @@ struct ExportSheet: View {
                     }
                 } catch {
                     await MainActor.run {
+                        failureCount += 1
                         errorMessage = error.localizedDescription
                     }
                 }
@@ -432,9 +457,7 @@ struct ExportSheet: View {
             
             await MainActor.run {
                 isUploading = false
-                if successCount > 0 {
-                    uploadComplete = true
-                }
+                uploadComplete = true
             }
         }
     }

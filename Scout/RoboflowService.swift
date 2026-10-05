@@ -119,25 +119,24 @@ class RoboflowService {
         
         let base64String = imageData.base64EncodedString()
         
-        // Upload to Roboflow
-        let uploadURL = URL(string: "https://api.roboflow.com/dataset/\(project)/upload")!
+        // Upload to Roboflow - api_key, name, split as query params
+        var components = URLComponents(string: "https://api.roboflow.com/dataset/\(project)/upload")!
+        components.queryItems = [
+            URLQueryItem(name: "api_key", value: apiKey),
+            URLQueryItem(name: "name", value: imageName),
+            URLQueryItem(name: "split", value: "train")
+        ]
+        
+        guard let uploadURL = components.url else {
+            throw RoboflowError.invalidURL
+        }
+        
         var request = URLRequest(url: uploadURL)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         
-        let params = [
-            "api_key": apiKey,
-            "name": imageName,
-            "split": "train"
-        ]
-        
-        var bodyComponents = URLComponents()
-        bodyComponents.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
-        
-        if var body = bodyComponents.query {
-            body += "&image=\(base64String)"
-            request.httpBody = body.data(using: .utf8)
-        }
+        // Body is raw base64 string
+        request.httpBody = base64String.data(using: .utf8)
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
@@ -162,18 +161,25 @@ class RoboflowService {
         project: String,
         apiKey: String
     ) async throws {
-        // Create empty annotation (null frame)
-        let annotateURL = URL(string: "https://api.roboflow.com/dataset/\(project)/annotate/\(imageId)")!
+        // Create empty annotation (null frame) - api_key and name as query params
+        var components = URLComponents(string: "https://api.roboflow.com/dataset/\(project)/annotate/\(imageId)")!
+        components.queryItems = [
+            URLQueryItem(name: "api_key", value: apiKey),
+            URLQueryItem(name: "name", value: imageId)
+        ]
+        
+        guard let annotateURL = components.url else {
+            throw RoboflowError.invalidURL
+        }
+        
         var request = URLRequest(url: annotateURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        // Empty annotation means no objects detected (null frame)
+        // Empty annotation file means no objects detected (null frame)
+        let annotationFile: [String: Any] = [:]
         let annotation: [String: Any] = [
-            "api_key": apiKey,
-            "name": imageId,
-            "annotation": [:],
-            "split": "train"
+            "annotationFile": annotationFile
         ]
         
         request.httpBody = try JSONSerialization.data(withJSONObject: annotation)
