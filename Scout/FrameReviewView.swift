@@ -177,13 +177,13 @@ struct FrameReviewView: View {
             } message: {
                 Text("This will delete all captured frames. This cannot be undone.")
             }
-            .sheet(isPresented: $showingExportSheet) {
-                ExportSheet(frames: frameStorage.exportKeptFrames())
-            } onDismiss: {
+            .sheet(isPresented: $showingExportSheet, onDismiss: {
                 // Clamp currentIndex after sheet may have deleted frames
                 if currentIndex >= frameStorage.frames.count {
                     currentIndex = max(0, frameStorage.frames.count - 1)
                 }
+            }) {
+                ExportSheet(frames: frameStorage.exportKeptFrames())
             }
         }
     }

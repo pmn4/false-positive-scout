@@ -121,7 +121,8 @@ class FrameStorage: ObservableObject {
                 timestamp: frame.timestamp,
                 detections: frame.detections,
                 imageData: nil,
-                kept: frame.kept
+                kept: frame.kept,
+                uploadedImageId: frame.uploadedImageId
             )
         }
         
@@ -155,7 +156,8 @@ class FrameStorage: ObservableObject {
                 timestamp: frame.timestamp,
                 detections: frame.detections,
                 imageData: imageData,
-                kept: frame.kept
+                kept: frame.kept,
+                uploadedImageId: frame.uploadedImageId
             )
         }
     }
