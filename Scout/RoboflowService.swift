@@ -205,9 +205,9 @@ class RoboflowService {
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let imageId = json["id"] as? String {
             
-            // Tag the uploaded image if tag is provided
+            // Tag the uploaded image if tag is provided (fail upload if tagging fails)
             if let tag = tag, !tag.isEmpty {
-                try? await tagImage(imageId: imageId, project: project, tag: tag)
+                try await tagImage(imageId: imageId, project: project, tag: tag)
             }
             
             return imageId
@@ -264,9 +264,9 @@ class RoboflowService {
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let imageId = json["id"] as? String {
             
-            // Tag if provided (best effort with API key)
+            // Tag if provided (fail upload if tagging fails)
             if let tag = tag, !tag.isEmpty {
-                try? await tagImageWithAPIKey(imageId: imageId, project: project, tag: tag, apiKey: apiKey)
+                try await tagImageWithAPIKey(imageId: imageId, project: project, tag: tag, apiKey: apiKey)
             }
             
             return imageId
@@ -284,11 +284,12 @@ class RoboflowService {
         request.httpMethod = "POST"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
-            print("Warning: Failed to tag image \(imageId) with tag '\(tag)'")
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Tagging failed"
+            throw RoboflowError.uploadFailed(message: "Failed to tag image: \(errorMessage)")
         }
     }
     
@@ -298,11 +299,12 @@ class RoboflowService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
-            print("Warning: Failed to tag image \(imageId) with tag '\(tag)'")
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Tagging failed"
+            throw RoboflowError.uploadFailed(message: "Failed to tag image: \(errorMessage)")
         }
     }
     

@@ -377,6 +377,37 @@ struct SettingsView: View {
                 if oauthManager.isAuthenticated && workspaces.isEmpty {
                     loadWorkspacesAndProjects()
                 }
+                
+                // Auto-load cached model if configured
+                loadCachedModelIfAvailable()
+            }
+        }
+    }
+    
+    private func loadCachedModelIfAvailable() {
+        guard !modelWorkspace.isEmpty, !modelProject.isEmpty, !modelVersion.isEmpty else {
+            return
+        }
+        
+        // Check if cache file exists
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("RoboflowModels")
+        let cacheURL = cacheDir.appendingPathComponent("\(modelWorkspace)_\(modelProject)_v\(modelVersion).mlpackage")
+        
+        guard FileManager.default.fileExists(atPath: cacheURL.path),
+              modelManager.currentModel == nil else {
+            return
+        }
+        
+        // Load the cached model
+        Task {
+            do {
+                let mlModel = try MLModel(contentsOf: cacheURL)
+                await MainActor.run {
+                    modelManager.currentModel = mlModel
+                }
+            } catch {
+                print("Failed to load cached model: \(error)")
             }
         }
     }

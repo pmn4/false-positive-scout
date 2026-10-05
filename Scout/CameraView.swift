@@ -150,8 +150,8 @@ struct CameraView: View {
     }
     
     private func startScanning() {
-        guard !modelId.isEmpty, !apiKey.isEmpty else {
-            errorMessage = "Configure Model ID and API Key in Settings"
+        guard modelManager.currentModel != nil else {
+            errorMessage = "No model loaded. Download a model in Settings first."
             return
         }
         

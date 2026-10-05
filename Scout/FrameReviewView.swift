@@ -300,13 +300,7 @@ struct ExportSheet: View {
     @State private var failureCount = 0
     @State private var partialSuccesses: [PartialSuccess] = []
     @State private var isRetrying = false
-    
-    // Generate session-based batch name for grouping uploads
-    private var batchName: String {
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
-        return "Scout - \(dateFormatter.string(from: Date()))"
-    }
+    @State private var currentBatchName: String = ""
     
     var body: some View {
         NavigationView {
@@ -454,6 +448,11 @@ struct ExportSheet: View {
             return
         }
         
+        // Capture batch name once for this upload session
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
+        currentBatchName = "Scout - \(dateFormatter.string(from: Date()))"
+        
         isUploading = true
         errorMessage = nil
         successCount = 0
@@ -519,7 +518,7 @@ struct ExportSheet: View {
                             imageName: imageName,
                             project: project,
                             tag: RoboflowService.defaultUploadTag,
-                            batchName: batchName,
+                            batchName: currentBatchName,
                             apiKey: apiKey.isEmpty ? nil : apiKey
                         )
                         

@@ -1,6 +1,7 @@
 import Foundation
 import CoreML
 import Vision
+import Compression
 
 // "I know I can, be what I wanna be" ~Nas (probably)
 // On-device Core ML model management and caching
@@ -111,84 +112,48 @@ class ModelManager: ObservableObject {
             throw ModelError.noDownloadLink
         }
         
-        // Download the .mlpackage (or zip containing it)
-        let downloadTask = URLSession.shared.downloadTask(with: downloadURL) { [weak self] tempURL, response, error in
-            guard let self = self else { return }
-            
-            if let error = error {
-                Task { @MainActor in
-                    self.isDownloading = false
-                }
-                print("Download error: \(error)")
-                return
-            }
-            
-            guard let tempURL = tempURL else {
-                Task { @MainActor in
-                    self.isDownloading = false
-                }
-                return
-            }
-            
-            Task {
-                do {
-                    // Move to cache directory
-                    let cacheDir = self.getCacheDirectory()
-                    if !self.fileManager.fileExists(atPath: cacheDir.path) {
-                        try self.fileManager.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-                    }
-                    
-                    // Check if downloaded file is a zip or .mlpackage
-                    if downloadLink.hasSuffix(".zip") {
-                        // Unzip and find .mlpackage
-                        try await self.unzipAndCacheModel(from: tempURL, to: cacheURL)
-                    } else {
-                        // Direct .mlpackage, just move it
-                        try self.fileManager.moveItem(at: tempURL, to: cacheURL)
-                    }
-                    
-                    // Load the cached model
-                    try await self.loadCachedModel(from: cacheURL)
-                    
-                    await MainActor.run {
-                        self.isDownloading = false
-                        self.downloadProgress = 1.0
-                    }
-                } catch {
-                    await MainActor.run {
-                        self.isDownloading = false
-                    }
-                    print("Cache error: \(error)")
-                }
-            }
-        }
+        // Download the .mlpackage (or zip containing it) using async/await
+        let (tempURL, _) = try await URLSession.shared.download(from: downloadURL)
         
-        downloadTask.resume()
+        do {
+            // Move to cache directory
+            let cacheDir = getCacheDirectory()
+            if !fileManager.fileExists(atPath: cacheDir.path) {
+                try fileManager.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+            }
+            
+            // Check if downloaded file is a zip or .mlpackage by URL extension
+            let downloadURLPath = URL(string: downloadLink)
+            let isZip = downloadURLPath?.pathExtension.lowercased() == "zip"
+            
+            if isZip {
+                // Unzip and find .mlpackage
+                try await unzipAndCacheModel(from: tempURL, to: cacheURL)
+            } else {
+                // Direct .mlpackage, just move it
+                try fileManager.moveItem(at: tempURL, to: cacheURL)
+            }
+            
+            // Load the cached model
+            try await loadCachedModel(from: cacheURL)
+            
+            await MainActor.run {
+                isDownloading = false
+                downloadProgress = 1.0
+            }
+        } catch {
+            await MainActor.run {
+                isDownloading = false
+            }
+            throw error
+        }
     }
     
     private func unzipAndCacheModel(from zipURL: URL, to destinationURL: URL) async throws {
-        // Create a temporary directory for unzipping
-        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        
-        // Unzip using NSFileCoordinator or shell (simplified approach)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-        process.arguments = ["-q", zipURL.path, "-d", tempDir.path]
-        try process.run()
-        process.waitUntilExit()
-        
-        // Find .mlpackage in unzipped contents
-        let contents = try fileManager.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil)
-        guard let mlpackage = contents.first(where: { $0.pathExtension == "mlpackage" || $0.lastPathComponent.hasSuffix(".mlpackage") }) else {
-            throw ModelError.mlpackageNotFound
-        }
-        
-        // Move to cache
-        try fileManager.moveItem(at: mlpackage, to: destinationURL)
-        
-        // Clean up temp directory
-        try? fileManager.removeItem(at: tempDir)
+        // Roboflow Core ML exports are typically direct .mlpackage files
+        // If zip support is needed, use ZipFoundation or similar library
+        // For now, provide clear error message
+        throw ModelError.zipNotSupported
     }
     
     private func loadCachedModel(from url: URL) async throws {
@@ -279,6 +244,7 @@ enum ModelError: LocalizedError {
     case noDownloadLink
     case downloadFailed(String)
     case mlpackageNotFound
+    case zipNotSupported
     case noModelLoaded
     case imageConversionFailed
     
@@ -294,6 +260,8 @@ enum ModelError: LocalizedError {
             return "Download failed: \(message)"
         case .mlpackageNotFound:
             return ".mlpackage not found in downloaded archive"
+        case .zipNotSupported:
+            return "ZIP model downloads not yet supported. Please use direct .mlpackage export."
         case .noModelLoaded:
             return "No model loaded. Please download a model first."
         case .imageConversionFailed:

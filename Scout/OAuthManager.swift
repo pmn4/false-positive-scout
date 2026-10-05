@@ -361,7 +361,11 @@ class OAuthManager: NSObject, ObservableObject {
 
 extension OAuthManager: ASWebAuthenticationPresentationContextProviding {
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        return ASPresentationAnchor()
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let window = windowScene.windows.first(where: { $0.isKeyWindow }) ?? windowScene.windows.first else {
+            return ASPresentationAnchor()
+        }
+        return window
     }
 }
 
