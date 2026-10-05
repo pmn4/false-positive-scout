@@ -210,12 +210,15 @@ struct SettingsView: View {
                                     
                                     previousWorkspace = newWorkspace
                                     
-                                    if let workspace = newWorkspace {
-                                        loadProjects(workspace: workspace.url)
-                                    } else if isRealChange {
-                                        // Only clear projects list if it's a real change to nil
-                                        projects = []
-                                        project = ""
+                                    // Only fetch/clear on real change (not on restore/populate)
+                                    if isRealChange {
+                                        if let workspace = newWorkspace {
+                                            loadProjects(workspace: workspace.url)
+                                        } else {
+                                            // Clear projects list on deselect
+                                            projects = []
+                                            project = ""
+                                        }
                                     }
                                 }
                             }
@@ -275,14 +278,13 @@ struct SettingsView: View {
                                     modelProject = proj.id
                                     modelWorkspace = ws.url
                                     
-                                    // Only clear when project ID actually changes
+                                    // Only fetch/clear on real change (not on restore/populate)
                                     if isRealChange {
                                         modelVersion = ""
                                         modelManager.currentModel = nil
                                         modelManager.currentVNCoreMLModel = nil
+                                        loadModelVersions(workspace: ws.url, project: proj.id)
                                     }
-                                    
-                                    loadModelVersions(workspace: ws.url, project: proj.id)
                                 } else if isRealChange {
                                     // Deselecting project: clear versions and unload model (mirror non-nil clear)
                                     modelVersions = []
