@@ -4,16 +4,6 @@ import UIKit
 // "Life's a bitch, then you die" - Nas (probably)
 // Core data models for Scout
 
-struct RoboflowConfig: Codable {
-    var modelId: String
-    var apiKey: String
-    var confidenceThreshold: Int
-    
-    static var `default`: RoboflowConfig {
-        RoboflowConfig(modelId: "", apiKey: "", confidenceThreshold: 40)
-    }
-}
-
 struct Detection: Codable, Identifiable {
     let id = UUID()
     let x: Double
@@ -27,11 +17,6 @@ struct Detection: Codable, Identifiable {
         case x, y, width, height, confidence
         case className = "class"
     }
-}
-
-struct InferenceResponse: Codable {
-    let predictions: [Detection]
-    let time: Double
 }
 
 struct CapturedFrame: Identifiable, Codable {

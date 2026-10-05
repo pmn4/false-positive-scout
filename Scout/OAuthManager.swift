@@ -1,0 +1,416 @@
+import Foundation
+import AuthenticationServices
+import CryptoKit
+
+// "It ain't hard to tell, I excel, then prevail" ~Nas (probably)
+// OAuth 2.1 flow with PKCE for Roboflow authentication
+
+class OAuthManager: NSObject, ObservableObject {
+    static let shared = OAuthManager()
+    
+    @Published var isAuthenticated = false
+    
+    // OAuth configuration
+    private let authorizationEndpoint = "https://app.roboflow.com/oauth/authorize"
+    private let tokenEndpoint = "https://app.roboflow.com/oauth/token"
+    private let validateEndpoint = "https://app.roboflow.com/oauth/validate"
+    
+    // Client ID placeholder - Patrick will paste from Roboflow OAuth app
+    private let clientId = "YOUR_ROBOFLOW_OAUTH_CLIENT_ID"
+    
+    // Redirect URI (matches Bundle ID URL scheme in Info.plist CFBundleURLTypes)
+    private let redirectURI = "com.scout.app://oauth/callback"
+    
+    // Required OAuth scopes for Scout's functionality
+    private let scopes = [
+        "workspace:read",   // List workspaces
+        "project:read",     // List projects
+        "version:read",     // List model versions for on-device picker
+        "image:create",     // Upload images
+        "image:read",       // Read uploaded images
+        "image:tag",        // Tag uploads (e.g. "scout")
+        "image:annotate"    // Annotate as null
+        // "folder:read"    // Optional: project folder tree (pending confirmation)
+    ]
+    
+    // Keychain keys
+    private let accessTokenKey = "scout_oauth_access_token"
+    private let refreshTokenKey = "scout_oauth_refresh_token"
+    private let tokenExpiryKey = "scout_oauth_token_expiry"
+    
+    private var authSession: ASWebAuthenticationSession?
+    
+    override private init() {
+        super.init()
+        checkAuthenticationStatus()
+    }
+    
+    // MARK: - Public Methods
+    
+    func signIn() async throws {
+        // Generate PKCE pair
+        let verifier = generateCodeVerifier()
+        let challenge = generateCodeChallenge(from: verifier)
+        let state = generateState()
+        
+        // Store verifier for later exchange
+        UserDefaults.standard.set(verifier, forKey: "oauth_code_verifier")
+        UserDefaults.standard.set(state, forKey: "oauth_state")
+        
+        // Build authorization URL
+        var components = URLComponents(string: authorizationEndpoint)!
+        components.queryItems = [
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "client_id", value: clientId),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
+            URLQueryItem(name: "scope", value: scopes.joined(separator: " ")),
+            URLQueryItem(name: "code_challenge", value: challenge),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "state", value: state)
+        ]
+        
+        guard let authURL = components.url else {
+            throw OAuthError.invalidURL
+        }
+        
+        // Start web authentication session
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.main.async {
+                self.authSession = ASWebAuthenticationSession(
+                    url: authURL,
+                    callbackURLScheme: "com.scout.app"
+                ) { callbackURL, error in
+                    if let error = error {
+                        continuation.resume(throwing: OAuthError.authorizationFailed(error.localizedDescription))
+                        return
+                    }
+                    
+                    guard let callbackURL = callbackURL else {
+                        continuation.resume(throwing: OAuthError.noCallbackURL)
+                        return
+                    }
+                    
+                    Task {
+                        do {
+                            try await self.handleCallback(callbackURL)
+                            continuation.resume()
+                        } catch {
+                            continuation.resume(throwing: error)
+                        }
+                    }
+                }
+                
+                self.authSession?.presentationContextProvider = self
+                self.authSession?.prefersEphemeralWebBrowserSession = false
+                self.authSession?.start()
+            }
+        }
+    }
+    
+    func signOut() {
+        // Clear tokens from keychain
+        deleteFromKeychain(key: accessTokenKey)
+        deleteFromKeychain(key: refreshTokenKey)
+        UserDefaults.standard.removeObject(forKey: tokenExpiryKey)
+        
+        DispatchQueue.main.async {
+            self.isAuthenticated = false
+        }
+    }
+    
+    func getAccessToken() async throws -> String {
+        // Check if we have a valid access token
+        if let token = getFromKeychain(key: accessTokenKey),
+           let expiryTimeInterval = UserDefaults.standard.object(forKey: tokenExpiryKey) as? TimeInterval {
+            let expiryDate = Date(timeIntervalSince1970: expiryTimeInterval)
+            
+            // If token expires in more than 5 minutes, use it
+            if expiryDate.timeIntervalSinceNow > 300 {
+                return token
+            }
+        }
+        
+        // Try to refresh the token
+        try await refreshAccessToken()
+        
+        guard let token = getFromKeychain(key: accessTokenKey) else {
+            throw OAuthError.noAccessToken
+        }
+        
+        return token
+    }
+    
+    // MARK: - Private Methods
+    
+    private func handleCallback(_ url: URL) async throws {
+        // Parse callback URL for code and state
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let queryItems = components.queryItems else {
+            throw OAuthError.invalidCallbackURL
+        }
+        
+        guard let code = queryItems.first(where: { $0.name == "code" })?.value else {
+            // Check for error
+            if let error = queryItems.first(where: { $0.name == "error" })?.value {
+                throw OAuthError.authorizationFailed(error)
+            }
+            throw OAuthError.noAuthorizationCode
+        }
+        
+        // Verify state
+        let receivedState = queryItems.first(where: { $0.name == "state" })?.value
+        let storedState = UserDefaults.standard.string(forKey: "oauth_state")
+        guard receivedState == storedState else {
+            throw OAuthError.stateMismatch
+        }
+        
+        // Get stored verifier
+        guard let verifier = UserDefaults.standard.string(forKey: "oauth_code_verifier") else {
+            throw OAuthError.noCodeVerifier
+        }
+        
+        // Exchange code for tokens
+        try await exchangeCodeForTokens(code: code, verifier: verifier)
+        
+        // Clean up stored values
+        UserDefaults.standard.removeObject(forKey: "oauth_code_verifier")
+        UserDefaults.standard.removeObject(forKey: "oauth_state")
+    }
+    
+    private func exchangeCodeForTokens(code: String, verifier: String) async throws {
+        var request = URLRequest(url: URL(string: tokenEndpoint)!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        // For public clients (native iOS), client_secret is not required when using PKCE
+        let bodyParams = [
+            "grant_type": "authorization_code",
+            "client_id": clientId,
+            "code": code,
+            "redirect_uri": redirectURI,
+            "code_verifier": verifier
+        ]
+        
+        request.httpBody = bodyParams
+            .map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0.value)" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw OAuthError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Token exchange failed"
+            throw OAuthError.tokenExchangeFailed(errorMessage)
+        }
+        
+        // Parse token response
+        let decoder = JSONDecoder()
+        let tokenResponse = try decoder.decode(TokenResponse.self, from: data)
+        
+        // Store tokens securely in keychain
+        saveToKeychain(key: accessTokenKey, value: tokenResponse.access_token)
+        saveToKeychain(key: refreshTokenKey, value: tokenResponse.refresh_token)
+        
+        // Calculate and store expiry time (access tokens valid for 1 hour)
+        let expiryDate = Date().addingTimeInterval(TimeInterval(tokenResponse.expires_in ?? 3600))
+        UserDefaults.standard.set(expiryDate.timeIntervalSince1970, forKey: tokenExpiryKey)
+        
+        DispatchQueue.main.async {
+            self.isAuthenticated = true
+        }
+    }
+    
+    private func refreshAccessToken() async throws {
+        guard let refreshToken = getFromKeychain(key: refreshTokenKey) else {
+            throw OAuthError.noRefreshToken
+        }
+        
+        var request = URLRequest(url: URL(string: tokenEndpoint)!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        let bodyParams = [
+            "grant_type": "refresh_token",
+            "client_id": clientId,
+            "refresh_token": refreshToken
+        ]
+        
+        request.httpBody = bodyParams
+            .map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0.value)" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw OAuthError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            // Refresh token expired or invalid, need to sign in again
+            signOut()
+            throw OAuthError.refreshFailed
+        }
+        
+        let decoder = JSONDecoder()
+        let tokenResponse = try decoder.decode(TokenResponse.self, from: data)
+        
+        // Update tokens
+        saveToKeychain(key: accessTokenKey, value: tokenResponse.access_token)
+        if let newRefreshToken = tokenResponse.refresh_token {
+            saveToKeychain(key: refreshTokenKey, value: newRefreshToken)
+        }
+        
+        let expiryDate = Date().addingTimeInterval(TimeInterval(tokenResponse.expires_in ?? 3600))
+        UserDefaults.standard.set(expiryDate.timeIntervalSince1970, forKey: tokenExpiryKey)
+    }
+    
+    private func checkAuthenticationStatus() {
+        // Check if we have stored tokens
+        if let accessToken = getFromKeychain(key: accessTokenKey),
+           !accessToken.isEmpty {
+            DispatchQueue.main.async {
+                self.isAuthenticated = true
+            }
+        }
+    }
+    
+    // MARK: - PKCE Methods
+    
+    private func generateCodeVerifier() -> String {
+        var buffer = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, buffer.count, &buffer)
+        return Data(buffer).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+    
+    private func generateCodeChallenge(from verifier: String) -> String {
+        let data = Data(verifier.utf8)
+        let hash = SHA256.hash(data: data)
+        return Data(hash).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+    
+    private func generateState() -> String {
+        var buffer = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, buffer.count, &buffer)
+        return Data(buffer).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+    
+    // MARK: - Keychain Methods
+    
+    private func saveToKeychain(key: String, value: String) {
+        let data = Data(value.utf8)
+        
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecValueData as String: data
+        ]
+        
+        SecItemDelete(query as CFDictionary)
+        SecItemAdd(query as CFDictionary, nil)
+    }
+    
+    private func getFromKeychain(key: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true
+        ]
+        
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let string = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        
+        return string
+    }
+    
+    private func deleteFromKeychain(key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key
+        ]
+        
+        SecItemDelete(query as CFDictionary)
+    }
+}
+
+// MARK: - ASWebAuthenticationPresentationContextProviding
+
+extension OAuthManager: ASWebAuthenticationPresentationContextProviding {
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        return ASPresentationAnchor()
+    }
+}
+
+// MARK: - Models
+
+struct TokenResponse: Codable {
+    let access_token: String
+    let refresh_token: String?
+    let expires_in: Int?
+    let token_type: String
+}
+
+// MARK: - Errors
+
+enum OAuthError: LocalizedError {
+    case invalidURL
+    case authorizationFailed(String)
+    case noCallbackURL
+    case invalidCallbackURL
+    case noAuthorizationCode
+    case stateMismatch
+    case noCodeVerifier
+    case tokenExchangeFailed(String)
+    case invalidResponse
+    case noAccessToken
+    case noRefreshToken
+    case refreshFailed
+    
+    var errorDescription: String? {
+        switch self {
+        case .invalidURL:
+            return "Invalid OAuth URL"
+        case .authorizationFailed(let message):
+            return "Authorization failed: \(message)"
+        case .noCallbackURL:
+            return "No callback URL received"
+        case .invalidCallbackURL:
+            return "Invalid callback URL format"
+        case .noAuthorizationCode:
+            return "No authorization code received"
+        case .stateMismatch:
+            return "Security check failed (state mismatch)"
+        case .noCodeVerifier:
+            return "Missing code verifier"
+        case .tokenExchangeFailed(let message):
+            return "Token exchange failed: \(message)"
+        case .invalidResponse:
+            return "Invalid response from server"
+        case .noAccessToken:
+            return "No access token available. Please sign in."
+        case .noRefreshToken:
+            return "No refresh token available. Please sign in again."
+        case .refreshFailed:
+            return "Session expired. Please sign in again."
+        }
+    }
+}

@@ -278,7 +278,7 @@ struct ExportSheet: View {
     let frames: [CapturedFrame]
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var frameStorage: FrameStorage
-    @AppStorage("scout_api_key") private var apiKey: String = ""
+    @ObservedObject var oauthManager = OAuthManager.shared
     @AppStorage("scout_project") private var project: String = ""
     
     // "Half real, half incredible, like a myth that's legible" ~Nas (probably)
@@ -402,8 +402,8 @@ struct ExportSheet: View {
                             .padding(.horizontal)
                     }
                     
-                    if apiKey.isEmpty || project.isEmpty {
-                        Text("⚠️ Configure API Key and Project ID in Settings")
+                    if !oauthManager.isAuthenticated || project.isEmpty {
+                        Text("⚠️ Sign in with Roboflow and select a Project in Settings")
                             .font(.caption)
                             .foregroundColor(.orange)
                             .multilineTextAlignment(.center)
@@ -417,10 +417,10 @@ struct ExportSheet: View {
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(isUploading || apiKey.isEmpty || project.isEmpty ? Color.gray : Color.blue)
+                            .background(isUploading || !oauthManager.isAuthenticated || project.isEmpty ? Color.gray : Color.blue)
                             .cornerRadius(12)
                     }
-                    .disabled(isUploading || apiKey.isEmpty || project.isEmpty)
+                    .disabled(isUploading || !oauthManager.isAuthenticated || project.isEmpty)
                     .padding(.horizontal)
                 }
                 
@@ -441,8 +441,8 @@ struct ExportSheet: View {
     }
     
     private func uploadFrames() {
-        guard !project.isEmpty, !apiKey.isEmpty else {
-            errorMessage = "Missing configuration"
+        guard !project.isEmpty, oauthManager.isAuthenticated else {
+            errorMessage = "Please sign in with Roboflow and select a project"
             return
         }
         
@@ -481,8 +481,7 @@ struct ExportSheet: View {
                             imageName: imageName,
                             imageWidth: Int(image.size.width),
                             imageHeight: Int(image.size.height),
-                            project: project,
-                            apiKey: apiKey
+                            project: project
                         )
                         
                         // Full success - remove from review list
@@ -509,8 +508,7 @@ struct ExportSheet: View {
                         let imageId = try await RoboflowService.shared.uploadImage(
                             image: image,
                             imageName: imageName,
-                            project: project,
-                            apiKey: apiKey
+                            project: project
                         )
                         
                         // Mark as uploaded
@@ -525,8 +523,7 @@ struct ExportSheet: View {
                                 imageName: imageName,
                                 imageWidth: Int(image.size.width),
                                 imageHeight: Int(image.size.height),
-                                project: project,
-                                apiKey: apiKey
+                                project: project
                             )
                             
                             // Full success - remove from review list
@@ -584,8 +581,7 @@ struct ExportSheet: View {
                         imageName: partial.imageName,
                         imageWidth: Int(partial.image.size.width),
                         imageHeight: Int(partial.image.size.height),
-                        project: project,
-                        apiKey: apiKey
+                        project: project
                     )
                     
                     retrySuccesses += 1

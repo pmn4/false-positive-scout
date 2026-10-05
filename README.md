@@ -19,6 +19,8 @@ When training object detection models, it's important to include negative exampl
 ## Features
 
 - 📱 **Native iOS App** – Built with SwiftUI for iPhone
+- 🧠 **On-Device Inference** – Runs object detection models locally via Core ML (no network required after download)
+- 🔒 **OAuth 2.1 Authentication** – Secure Sign in with Roboflow using PKCE
 - 📷 **Front & Back Camera** – Switch between cameras on the fly
 - 🎥 **Hold-to-Record** – Only saves frames while you hold the record button
 - 🎯 **Smart Deduplication** – Uses perceptual hashing to skip similar frames
@@ -26,8 +28,9 @@ When training object detection models, it's important to include negative exampl
 - 🔍 **Fast Review UI** – Swipe through frames, keep or delete with a tap
 - 💾 **Local Storage** – All frames stored on device, review offline
 - ☁️ **Bulk Upload** – Upload kept frames directly to Roboflow with progress tracking
+- 🏷️ **Auto-Tagging** – Tags uploads with "scout" for easy filtering
 - 🏷️ **Auto-Nullify** – Automatically marks uploaded frames as null/negative examples
-- 🤖 **Roboflow Integration** – Direct inference through Roboflow's API
+- 📥 **Model Caching** – Downloads models once, runs fully offline afterward
 - ⚙️ **Configurable Threshold** – Adjust confidence levels for capture sensitivity
 
 ## Requirements
@@ -59,21 +62,69 @@ When training object detection models, it's important to include negative exampl
 
 ### Configuration
 
-1. **Get your Roboflow credentials:**
-   - Log in to [Roboflow](https://roboflow.com)
-   - Open your object detection project
-   - Navigate to your model version
-   - Copy the Model ID (format: `workspace/version`, e.g., `my-workspace/3`)
-   - Get your API key from your [Roboflow settings](https://app.roboflow.com/settings/api)
-   - Note your **Workspace** name and **Project ID** from your project URL
+#### 1. Register a Roboflow OAuth App
 
-2. **Configure Scout:**
+Scout uses **Sign in with Roboflow** (OAuth 2.1 with PKCE) for secure authentication and on-device model deployment.
+
+1. **Open Roboflow Developer Settings:**
+   - Log in to [Roboflow](https://app.roboflow.com)
+   - Go to **Workspace Settings > Developer**
+
+2. **Create a new OAuth app:**
+   - Click **Create OAuth App** (or **New app**)
+   - Fill in the following:
+     - **Name**: `Scout` (or your preferred name)
+     - **Homepage URL**: Your app homepage (e.g., `https://github.com/pmn4/false-positive-scout`)
+     - **Redirect URI**: `com.scout.app://oauth/callback` (exactly as shown)
+     - **Token endpoint authentication**: `client_secret_post` (default)
+     - **Allowed scopes**: Select the following scopes:
+       - `workspace:read` - List workspaces
+       - `project:read` - List projects
+       - `version:read` - List model versions for download
+       - `image:create` - Upload null frames
+       - `image:read` - Read uploaded images
+       - `image:tag` - Tag uploads with "scout"
+       - `image:annotate` - Mark images as null examples
+     - **Visibility**: `Internal` (recommended) or `Unlisted`
+
+3. **Copy your Client ID:**
+   - After creating the app, copy the **Client ID** (starts with `rfc_...`)
+   - You'll paste this into the Scout code in the next step
+
+#### 2. Configure Scout with Your OAuth Client ID
+
+1. **Open the project in Xcode:**
+   ```bash
+   open Scout.xcodeproj
+   ```
+
+2. **Update the OAuth Client ID:**
+   - Open `Scout/OAuthManager.swift`
+   - Find the line: `private let clientId = "YOUR_ROBOFLOW_OAUTH_CLIENT_ID"`
+   - Replace `YOUR_ROBOFLOW_OAUTH_CLIENT_ID` with your Client ID from step 1
+
+3. **Sign in and configure Scout:**
    - Open Scout and tap the **Settings** tab
-   - Enter your **Model ID** (for inference)
-   - Enter your **API Key**
-   - Enter your **Workspace** name (optional, for future features)
-   - Enter your **Project ID** (required for upload)
-   - Adjust **Confidence Threshold** if needed (default: 40%)
+   - Tap **Sign in with Roboflow**
+   - Authorize Scout to access your workspaces, projects, and models
+
+4. **Download an on-device detection model:**
+   - After sign-in, tap **Load Workspaces & Projects**
+   - Under **On-Device Detection Model**:
+     - Select the **Workspace** containing your model
+     - Select the **Project** with a trained object detection model
+     - Choose a **Model Version** (Core ML compatible: RF-DETR, YoloLite)
+     - Tap **Download Model** to cache it locally
+   - The model downloads once and runs **fully offline** for all future scouting
+   - Supports **RF-DETR**, **YoloLite**, and **Classification** models exported to Core ML
+
+5. **Select upload destination:**
+   - Under **Upload Destination**, choose the project where null frames will be uploaded
+   - This can be the same project as your detection model, or a different one
+
+6. **Adjust detection threshold (optional):**
+   - Set **Confidence Threshold** (default: 40%)
+   - Lower values capture more detections, including weak false positives
 
 ### Usage
 
@@ -145,20 +196,27 @@ When training object detection models, it's important to include negative exampl
 
 - **Language:** Swift 5.0
 - **Framework:** SwiftUI
-- **Platform:** iOS 16.0+
-- **API:** Roboflow Inference & Upload APIs
+- **Platform:** iOS 15.4+ (iOS 18.0+ for instance segmentation models)
+- **On-Device Inference:** Core ML + Vision framework
+- **Authentication:** OAuth 2.1 (authorization code + PKCE) via ASWebAuthenticationSession
+- **API:** Roboflow REST API (api.roboflow.com) with Bearer tokens
+- **Model Format:** Core ML (.mlpackage) - RF-DETR, YoloLite, Classification
 - **Camera:** AVFoundation
-- **Storage:** UserDefaults + Documents Directory
+- **Storage:** UserDefaults + Documents Directory + Keychain (OAuth tokens) + Caches (models)
 - **Image Similarity:** Perceptual hashing (custom implementation)
 - **Architecture:** MVVM with ObservableObject state management
 
 ## Privacy & Security
 
+- **On-Device Inference:** Detection runs entirely on-device via Core ML (no images sent to cloud for inference)
+- **Offline Operation:** After model download, scouting works completely offline
 - **Local First:** All frame data is stored on your device
-- **No Backend:** Scout doesn't store or transmit your images to any server except Roboflow's API
-- **API Key Protection:** API keys are stored only in iOS app storage (UserDefaults) and never logged or exposed
+- **OAuth Security:** Access tokens stored securely in iOS Keychain; refresh tokens valid for 30 days
+- **Minimal Scopes:** Requests only necessary permissions (workspace/project/version read, image create/read/tag/annotate)
+- **PKCE Protection:** Uses OAuth 2.1 with PKCE (Proof Key for Code Exchange) for public clients
 - **Camera Permission:** Required for frame capture; you control when scanning is active
 - **Direct Upload:** Frames are uploaded directly to your Roboflow project (no Photos export)
+- **Auto-Tagging:** Uploads tagged with "scout" for easy identification
 - **Generic Scenes:** Scout is designed for object detection on generic scenes—avoid filming people or sensitive content
 
 ## Project Structure
@@ -167,22 +225,99 @@ When training object detection models, it's important to include negative exampl
 Scout/
 ├── ScoutApp.swift          # App entry point
 ├── ContentView.swift       # Main tab navigation
-├── CameraView.swift        # Camera feed and scanning logic
+├── CameraView.swift        # Camera feed with on-device inference
 ├── FrameReviewView.swift   # Swipe review interface
-├── SettingsView.swift      # Configuration UI
-├── RoboflowService.swift   # Roboflow API integration
+├── SettingsView.swift      # OAuth sign-in, model picker, project picker UI
+├── OAuthManager.swift      # OAuth 2.1 + PKCE flow manager
+├── ModelManager.swift      # Core ML model download, caching, inference
+├── RoboflowService.swift   # Roboflow REST API (upload, tag, annotate)
 ├── Models.swift            # Data models and storage
-├── Info.plist             # App permissions and config
+├── Info.plist             # App permissions, OAuth URL scheme
 └── Assets.xcassets/       # App icons and assets
 ```
+
+## Testing OAuth Flow & On-Device Inference
+
+After configuring your OAuth Client ID:
+
+1. **Build and run** Scout on a physical device or simulator (iOS 15.4+)
+2. **Sign in:**
+   - Open Settings and tap **Sign in with Roboflow**
+   - Authorize Scout in the web view (you'll see your OAuth app name)
+   - Verify redirect: Scout should close the web view and show "Signed in to Roboflow"
+3. **Download a model:**
+   - Tap **Load Workspaces & Projects**
+   - Select your workspace and a project with a trained Core ML-compatible model (RF-DETR or YoloLite)
+   - Choose a model version and tap **Download Model**
+   - Wait for "Model ready for on-device inference" confirmation
+4. **Select upload destination:**
+   - Choose the project where null frames will be uploaded
+5. **Test scouting:**
+   - Go to the **Scan** tab
+   - Tap **Start** (button is disabled until model is loaded)
+   - Point camera at scenes, hold the record button when false positives occur
+   - Captured frames appear in the **Review** tab
+6. **Test upload:**
+   - Review captured frames
+   - Tap **Upload & Nullify** from the menu
+   - Uploaded frames are tagged with "scout" and marked as null examples
+
+### Troubleshooting OAuth
+
+- **"Invalid redirect URI" error:**
+  - Verify the redirect URI in your Roboflow OAuth app exactly matches: `com.scout.app://oauth/callback`
+  - Check that `Info.plist` has `CFBundleURLTypes` with `com.scout.app` URL scheme
+
+- **"Invalid client" error:**
+  - Double-check the Client ID in `OAuthManager.swift` matches your Roboflow OAuth app
+  - Ensure you didn't include extra spaces or quotes
+
+- **Sign-in opens but doesn't return to Scout:**
+  - Verify the bundle ID is `com.scout.app` in Xcode project settings
+  - Check that the URL scheme is registered in `Info.plist`
+
+- **Token expired / refresh failed:**
+  - Access tokens expire after 1 hour; refresh tokens expire after 30 days
+  - Sign out and sign in again to get fresh tokens
+
+- **Upload/model download fails with 401/403:**
+  - Your OAuth app must have the required scopes: `workspace:read`, `project:read`, `version:read`, `image:create`, `image:read`, `image:tag`, `image:annotate`
+  - Sign out, update scopes in Roboflow OAuth app settings, then sign in again
+
+### Troubleshooting On-Device Inference
+
+- **"Start" button is disabled / grayed out:**
+  - A Core ML model must be downloaded first
+  - Go to Settings > On-Device Detection Model > Download Model
+
+- **Model download fails:**
+  - Ensure your project has a trained model version
+  - Only RF-DETR, YoloLite, and Classification models support Core ML export
+  - Check that `version:read` scope is enabled in your OAuth app
+
+- **"No model loaded" error during scanning:**
+  - The downloaded model may have failed to load
+  - Try downloading the model again from Settings
+  - Check device storage (models can be 10-100+ MB)
+
+- **Inference is slow or uses too much battery:**
+  - Core ML models run on Neural Engine (A11+ / iPhone 8+) for best performance
+  - Older devices fall back to GPU, which is slower and less power-efficient
+  - Consider using a lighter model architecture (YoloLite instead of RF-DETR)
+
+- **No detections or incorrect detections:**
+  - Verify you downloaded the correct model version
+  - Check the confidence threshold (Settings > Detection Settings)
+  - Ensure the model was trained on similar object classes and conditions
 
 ## Building for Release
 
 1. Open `Scout.xcodeproj` in Xcode
 2. Select **Any iOS Device** as the build target
 3. Set your development team in Signing & Capabilities
-4. Archive the app: **Product > Archive**
-5. Distribute via App Store Connect or TestFlight
+4. Verify bundle ID is `com.scout.app` (matches OAuth redirect URI)
+5. Archive the app: **Product > Archive**
+6. Distribute via App Store Connect or TestFlight
 
 ## Contributing
 

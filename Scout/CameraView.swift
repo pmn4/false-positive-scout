@@ -7,10 +7,9 @@ import UIKit
 
 struct CameraView: View {
     @EnvironmentObject var frameStorage: FrameStorage
-    @AppStorage("scout_model_id") private var modelId: String = ""
-    @AppStorage("scout_api_key") private var apiKey: String = ""
     @AppStorage("scout_confidence") private var confidence: Int = 40
     
+    @ObservedObject var modelManager = ModelManager.shared
     @StateObject private var cameraManager = CameraManager()
     @State private var isScanning = false
     @State private var isRecording = false
@@ -81,10 +80,10 @@ struct CameraView: View {
                                         .font(.headline)
                                         .foregroundColor(.white)
                                         .frame(width: 120, height: 50)
-                                        .background(Color.blue)
+                                        .background(modelManager.currentModel != nil ? Color.blue : Color.gray)
                                         .cornerRadius(25)
                                 }
-                                .disabled(modelId.isEmpty || apiKey.isEmpty)
+                                .disabled(modelManager.currentModel == nil)
                             } else {
                                 Button(action: {}) {
                                     Circle()
@@ -196,14 +195,19 @@ struct CameraView: View {
             return
         }
         
-        let config = RoboflowConfig(
-            modelId: modelId,
-            apiKey: apiKey,
-            confidenceThreshold: confidence
-        )
+        guard modelManager.currentModel != nil else {
+            await MainActor.run {
+                errorMessage = "No model loaded. Please download a model in Settings."
+                stopScanning()
+            }
+            return
+        }
         
         do {
-            let detections = try await RoboflowService.shared.detect(image: image, config: config)
+            let detections = try await modelManager.detect(
+                image: image,
+                confidenceThreshold: Float(confidence) / 100.0
+            )
             
             // Only save if recording AND detections found AND different from last saved
             if isRecording && !detections.isEmpty {

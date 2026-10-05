@@ -17,84 +17,106 @@ struct UploadProgress {
     }
 }
 
+// "Born alone, die alone, no crew to keep my crown" ~Nas (probably)
+// Workspace and project models for OAuth-based project selection
+struct Workspace: Codable, Identifiable {
+    let url: String
+    let name: String
+    let members: Int?
+    
+    var id: String { url }
+}
+
+struct Project: Codable, Identifiable {
+    let id: String
+    let name: String
+    let workspace: String?
+}
+
 class RoboflowService {
     static let shared = RoboflowService()
     
     private init() {}
     
-    func detect(image: UIImage, config: RoboflowConfig) async throws -> [Detection] {
-        guard !config.modelId.isEmpty, !config.apiKey.isEmpty else {
-            throw RoboflowError.missingConfiguration
-        }
+    // MARK: - OAuth-based methods
+    
+    // List all workspaces accessible to the authenticated user
+    func listWorkspaces() async throws -> [Workspace] {
+        let accessToken = try await OAuthManager.shared.getAccessToken()
         
-        let parts = config.modelId.split(separator: "/")
-        guard parts.count == 2 else {
-            throw RoboflowError.invalidModelId
-        }
-        
-        let workspace = String(parts[0])
-        let version = String(parts[1])
-        
-        // Convert image to base64
-        guard let imageData = image.jpegData(compressionQuality: 0.8) else {
-            throw RoboflowError.imageConversionFailed
-        }
-        
-        let base64String = imageData.base64EncodedString()
-        
-        // Build URL
-        var components = URLComponents(string: "https://detect.roboflow.com/\(workspace)/\(version)")!
-        components.queryItems = [
-            URLQueryItem(name: "api_key", value: config.apiKey),
-            URLQueryItem(name: "confidence", value: String(config.confidenceThreshold))
-        ]
-        
-        guard let url = components.url else {
-            throw RoboflowError.invalidURL
-        }
-        
-        // Create request
+        let url = URL(string: "https://api.roboflow.com/")!
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.httpBody = base64String.data(using: .utf8)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         
-        // Make request
         let (data, response) = try await URLSession.shared.data(for: request)
         
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw RoboflowError.invalidResponse
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw RoboflowError.apiError(statusCode: 0, message: "Failed to fetch workspaces")
         }
         
-        guard httpResponse.statusCode == 200 else {
-            let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw RoboflowError.apiError(statusCode: httpResponse.statusCode, message: errorMessage)
-        }
-        
-        // Decode response
         let decoder = JSONDecoder()
-        let inferenceResponse = try decoder.decode(InferenceResponse.self, from: data)
-        
-        return inferenceResponse.predictions
+        let workspaceResponse = try decoder.decode([String: [Workspace]].self, from: data)
+        return workspaceResponse["workspaces"] ?? []
     }
     
-    // Upload image to Roboflow project
+    // List all projects in a workspace
+    func listProjects(workspace: String) async throws -> [Project] {
+        let accessToken = try await OAuthManager.shared.getAccessToken()
+        
+        let url = URL(string: "https://api.roboflow.com/\(workspace)")!
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw RoboflowError.apiError(statusCode: 0, message: "Failed to fetch projects")
+        }
+        
+        let decoder = JSONDecoder()
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let projectsDict = json["workspace"] as? [String: Any],
+           let projectsArray = projectsDict["projects"] as? [[String: Any]] {
+            
+            let projects = projectsArray.compactMap { dict -> Project? in
+                guard let id = dict["id"] as? String,
+                      let name = dict["name"] as? String else {
+                    return nil
+                }
+                return Project(id: id, name: name, workspace: workspace)
+            }
+            return projects
+        }
+        
+        return []
+    }
+    
+    
+    // MARK: - Upload & Annotate (OAuth Bearer token)
+    
+    // Default tag for Scout uploads (configurable)
+    static let defaultUploadTag = "scout"
+    
+    // Upload image to Roboflow project using OAuth access token
     func uploadImage(
         image: UIImage,
         imageName: String,
         project: String,
-        apiKey: String
+        tag: String? = defaultUploadTag
     ) async throws -> String {
+        let accessToken = try await OAuthManager.shared.getAccessToken()
+        
         guard let imageData = image.jpegData(compressionQuality: 0.8) else {
             throw RoboflowError.imageConversionFailed
         }
         
         let base64String = imageData.base64EncodedString()
         
-        // Upload to Roboflow - api_key, name, split as query params
+        // Upload using Bearer token
         var components = URLComponents(string: "https://api.roboflow.com/dataset/\(project)/upload")!
         components.queryItems = [
-            URLQueryItem(name: "api_key", value: apiKey),
             URLQueryItem(name: "name", value: imageName),
             URLQueryItem(name: "split", value: "train")
         ]
@@ -106,8 +128,8 @@ class RoboflowService {
         var request = URLRequest(url: uploadURL)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         
-        // Body is raw base64 string
         request.httpBody = base64String.data(using: .utf8)
         
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -118,25 +140,49 @@ class RoboflowService {
             throw RoboflowError.uploadFailed(message: errorMessage)
         }
         
-        // Parse response to get image ID
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let imageId = json["id"] as? String {
+            
+            // Tag the uploaded image if tag is provided
+            if let tag = tag, !tag.isEmpty {
+                try? await tagImage(imageId: imageId, project: project, tag: tag)
+            }
+            
             return imageId
         }
         
         throw RoboflowError.uploadFailed(message: "No image ID returned")
     }
     
-    // Annotate image as null using COCO JSON format
+    // Tag an uploaded image (using image:tag scope)
+    private func tagImage(imageId: String, project: String, tag: String) async throws {
+        let accessToken = try await OAuthManager.shared.getAccessToken()
+        
+        let url = URL(string: "https://api.roboflow.com/dataset/\(project)/\(imageId)/tag?tag=\(tag)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            // Tagging failure is non-critical, just log it
+            print("Warning: Failed to tag image \(imageId) with tag '\(tag)'")
+        }
+    }
+    
+    // Annotate image as null using COCO JSON format with OAuth Bearer token
     // Matches Roboflow CLI/SDK mechanism for marking null/negative examples
     func annotateAsNull(
         imageId: String,
         imageName: String,
         imageWidth: Int,
         imageHeight: Int,
-        project: String,
-        apiKey: String
+        project: String
     ) async throws {
+        let accessToken = try await OAuthManager.shared.getAccessToken()
+        
         // Build COCO JSON with image but no annotations (null example)
         let cocoJson: [String: Any] = [
             "images": [
@@ -147,7 +193,7 @@ class RoboflowService {
                     "height": imageHeight
                 ]
             ],
-            "annotations": [],  // Empty annotations = null example
+            "annotations": [],
             "categories": []
         ]
         
@@ -156,10 +202,8 @@ class RoboflowService {
             throw RoboflowError.annotationFailed(message: "Failed to create COCO JSON")
         }
         
-        // POST to annotate endpoint following Python SDK pattern
         var components = URLComponents(string: "https://api.roboflow.com/dataset/\(project)/annotate/\(imageId)")!
         components.queryItems = [
-            URLQueryItem(name: "api_key", value: apiKey),
             URLQueryItem(name: "name", value: "\(imageName).coco.json")
         ]
         
@@ -170,8 +214,8 @@ class RoboflowService {
         var request = URLRequest(url: annotateURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         
-        // Body matches Python SDK: {"annotationFile": "<COCO JSON>", "labelmap": {}}
         let payload: [String: Any] = [
             "annotationFile": cocoJsonString,
             "labelmap": [:]
@@ -185,13 +229,12 @@ class RoboflowService {
             throw RoboflowError.invalidResponse
         }
         
-        // Mirror Roboflow SDK: 409 "already annotated" is soft success
         if httpResponse.statusCode == 409 {
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let error = json["error"] as? [String: Any],
                let message = error["message"] as? String,
                message.contains("already annotated") {
-                return // Soft success
+                return
             }
         }
         
@@ -200,7 +243,6 @@ class RoboflowService {
             throw RoboflowError.annotationFailed(message: errorMessage)
         }
         
-        // Optionally check success in JSON body for 200
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let success = json["success"] as? Bool, !success {
                 let errorMessage = json["error"] as? String ?? "Annotation failed"
@@ -211,8 +253,6 @@ class RoboflowService {
 }
 
 enum RoboflowError: LocalizedError {
-    case missingConfiguration
-    case invalidModelId
     case imageConversionFailed
     case invalidURL
     case invalidResponse
@@ -222,10 +262,6 @@ enum RoboflowError: LocalizedError {
     
     var errorDescription: String? {
         switch self {
-        case .missingConfiguration:
-            return "Please configure your Model ID and API Key in Settings"
-        case .invalidModelId:
-            return "Model ID must be in format: workspace/version"
         case .imageConversionFailed:
             return "Failed to process image"
         case .invalidURL:

@@ -1,22 +1,33 @@
 import SwiftUI
 
 // "Whose world is this? The world is yours" - Nas (probably)
-// Configuration interface for Roboflow credentials
+// OAuth-based configuration for Roboflow
 
 struct SettingsView: View {
-    @AppStorage("scout_model_id") private var modelId: String = ""
-    @AppStorage("scout_api_key") private var apiKey: String = ""
-    @AppStorage("scout_workspace") private var workspace: String = ""
     @AppStorage("scout_project") private var project: String = ""
+    @AppStorage("scout_model_workspace") private var modelWorkspace: String = ""
+    @AppStorage("scout_model_project") private var modelProject: String = ""
+    @AppStorage("scout_model_version") private var modelVersion: String = ""
     @AppStorage("scout_confidence") private var confidence: Int = 40
     
-    @State private var showingApiKey = false
+    @ObservedObject var oauthManager = OAuthManager.shared
+    @ObservedObject var modelManager = ModelManager.shared
+    @State private var isSigningIn = false
+    @State private var signInError: String?
+    @State private var workspaces: [Workspace] = []
+    @State private var projects: [Project] = []
+    @State private var selectedWorkspace: Workspace?
+    @State private var selectedModelProject: Project?
+    @State private var modelVersions: [ModelVersion] = []
+    @State private var isLoadingProjects = false
+    @State private var isLoadingVersions = false
+    @State private var loadError: String?
     
     var body: some View {
         NavigationView {
             Form {
                 Section {
-                    Text("Configure your Roboflow object detection model to start capturing null frames.")
+                    Text("Sign in with Roboflow to upload null frames and improve your object detection model.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 } header: {
@@ -24,87 +35,211 @@ struct SettingsView: View {
                 }
                 
                 Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Model ID")
-                            .font(.headline)
-                        
-                        TextField("workspace/version", text: $modelId)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        
-                        Text("Format: workspace/version (e.g., my-workspace/3)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("API Key")
-                            .font(.headline)
-                        
+                    if oauthManager.isAuthenticated {
                         HStack {
-                            if showingApiKey {
-                                TextField("Your Roboflow API key", text: $apiKey)
-                                    .textInputAutocapitalization(.never)
-                                    .autocorrectionDisabled()
-                            } else {
-                                SecureField("Your Roboflow API key", text: $apiKey)
-                                    .textInputAutocapitalization(.never)
-                                    .autocorrectionDisabled()
-                            }
-                            
-                            Button(action: {
-                                showingApiKey.toggle()
-                            }) {
-                                Image(systemName: showingApiKey ? "eye.slash" : "eye")
-                                    .foregroundColor(.secondary)
-                            }
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text("Signed in to Roboflow")
+                            Spacer()
                         }
                         
-                        Text("Get your API key from Roboflow Settings")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        Button(action: {
+                            oauthManager.signOut()
+                            workspaces = []
+                            projects = []
+                            selectedWorkspace = nil
+                            project = ""
+                        }) {
+                            HStack {
+                                Spacer()
+                                Text("Sign Out")
+                                    .foregroundColor(.red)
+                                Spacer()
+                            }
+                        }
+                    } else {
+                        Button(action: {
+                            signIn()
+                        }) {
+                            HStack {
+                                Spacer()
+                                if isSigningIn {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle())
+                                        .padding(.trailing, 8)
+                                }
+                                Text(isSigningIn ? "Signing in..." : "Sign in with Roboflow")
+                                    .fontWeight(.medium)
+                                Spacer()
+                            }
+                        }
+                        .disabled(isSigningIn)
+                        
+                        if let error = signInError {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
                     }
-                    .padding(.vertical, 4)
                 } header: {
-                    Text("Roboflow Configuration")
-                }
-                
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Workspace")
-                            .font(.headline)
-                        
-                        TextField("my-workspace", text: $workspace)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        
-                        Text("Your Roboflow workspace name")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Project ID")
-                            .font(.headline)
-                        
-                        TextField("my-project", text: $project)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        
-                        Text("Project ID for uploading null frames")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                } header: {
-                    Text("Upload Configuration")
+                    Text("Authentication")
                 } footer: {
-                    Text("Project ID required for bulk upload & nullify. Workspace is optional (kept for future features).")
+                    Text("OAuth authentication with workspace:read, project:read, image:create, image:annotate, and model:infer scopes")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+                
+                if oauthManager.isAuthenticated {
+                    Section {
+                        if workspaces.isEmpty && projects.isEmpty {
+                            Button(action: {
+                                loadWorkspacesAndProjects()
+                            }) {
+                                HStack {
+                                    Spacer()
+                                    Text("Load Workspaces & Projects")
+                                    Spacer()
+                                }
+                            }
+                        } else {
+                            if !workspaces.isEmpty {
+                                Picker("Workspace", selection: $selectedWorkspace) {
+                                    Text("Select workspace").tag(nil as Workspace?)
+                                    ForEach(workspaces) { workspace in
+                                        Text(workspace.name).tag(workspace as Workspace?)
+                                    }
+                                }
+                                .onChange(of: selectedWorkspace) { newWorkspace in
+                                    if let workspace = newWorkspace {
+                                        loadProjects(workspace: workspace.url)
+                                    } else {
+                                        projects = []
+                                        project = ""
+                                    }
+                                }
+                            }
+                            
+                            if isLoadingProjects {
+                                HStack {
+                                    Spacer()
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle())
+                                    Text("Loading projects...")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                }
+                            } else if !projects.isEmpty {
+                                Picker("Upload Project", selection: $project) {
+                                    Text("Select project").tag("")
+                                    ForEach(projects) { proj in
+                                        Text(proj.name).tag(proj.id)
+                                    }
+                                }
+                                
+                                if !project.isEmpty {
+                                    Text("Null frames will be uploaded to: \(projects.first(where: { $0.id == project })?.name ?? project)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                        
+                        if let error = loadError {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
+                    } header: {
+                        Text("Upload Destination")
+                    } footer: {
+                        Text("Select the Roboflow project where null frames will be uploaded")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    Section {
+                        if !projects.isEmpty {
+                            Picker("Detection Model Project", selection: $selectedModelProject) {
+                                Text("Select project").tag(nil as Project?)
+                                ForEach(projects) { proj in
+                                    Text(proj.name).tag(proj as Project?)
+                                }
+                            }
+                            .onChange(of: selectedModelProject) { newProject in
+                                if let proj = newProject, let ws = selectedWorkspace {
+                                    modelProject = proj.id
+                                    modelWorkspace = ws.url
+                                    loadModelVersions(workspace: ws.url, project: proj.id)
+                                } else {
+                                    modelVersions = []
+                                    modelVersion = ""
+                                }
+                            }
+                            
+                            if isLoadingVersions {
+                                HStack {
+                                    Spacer()
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle())
+                                    Text("Loading models...")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                }
+                            } else if !modelVersions.isEmpty {
+                                Picker("Model Version", selection: $modelVersion) {
+                                    Text("Select version").tag("")
+                                    ForEach(modelVersions) { version in
+                                        Text(version.displayName).tag(version.id)
+                                    }
+                                }
+                                
+                                if !modelVersion.isEmpty && !modelWorkspace.isEmpty && !modelProject.isEmpty {
+                                    if modelManager.isDownloading {
+                                        HStack {
+                                            ProgressView(value: modelManager.downloadProgress)
+                                                .progressViewStyle(LinearProgressViewStyle())
+                                            Text("\(Int(modelManager.downloadProgress * 100))%")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    } else if modelManager.currentModel != nil {
+                                        HStack {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundColor(.green)
+                                            Text("Model ready for on-device inference")
+                                                .font(.caption)
+                                        }
+                                    } else {
+                                        Button(action: {
+                                            downloadModel()
+                                        }) {
+                                            HStack {
+                                                Spacer()
+                                                Text("Download Model")
+                                                Spacer()
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if let error = loadError {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
+                    } header: {
+                        Text("On-Device Detection Model")
+                    } footer: {
+                        Text("Download a Core ML model for on-device inference. Works offline after download.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
                 
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
@@ -168,20 +303,123 @@ struct SettingsView: View {
                     }
                 } header: {
                     Text("About Scout")
-                } footer: {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Scout helps you collect null frames (false positives) to improve your object detection model.")
-                        
-                        Text("Point the camera at scenes where nothing should be detected. When your model incorrectly fires, Scout saves that frame.")
-                        
-                        Text("Review and export these frames, then upload them to Roboflow as negative examples.")
-                    }
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.top, 8)
                 }
             }
             .navigationTitle("Settings")
+            .onAppear {
+                if oauthManager.isAuthenticated && workspaces.isEmpty {
+                    loadWorkspacesAndProjects()
+                }
+            }
+        }
+    }
+    
+    private func signIn() {
+        isSigningIn = true
+        signInError = nil
+        
+        Task {
+            do {
+                try await oauthManager.signIn()
+                await MainActor.run {
+                    isSigningIn = false
+                    loadWorkspacesAndProjects()
+                }
+            } catch {
+                await MainActor.run {
+                    isSigningIn = false
+                    signInError = error.localizedDescription
+                }
+            }
+        }
+    }
+    
+    private func loadWorkspacesAndProjects() {
+        loadError = nil
+        
+        Task {
+            do {
+                let loadedWorkspaces = try await RoboflowService.shared.listWorkspaces()
+                await MainActor.run {
+                    self.workspaces = loadedWorkspaces
+                    if let first = loadedWorkspaces.first {
+                        self.selectedWorkspace = first
+                        loadProjects(workspace: first.url)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    loadError = error.localizedDescription
+                }
+            }
+        }
+    }
+    
+    private func loadProjects(workspace: String) {
+        isLoadingProjects = true
+        loadError = nil
+        
+        Task {
+            do {
+                let loadedProjects = try await RoboflowService.shared.listProjects(workspace: workspace)
+                await MainActor.run {
+                    self.projects = loadedProjects
+                    self.isLoadingProjects = false
+                    
+                    if !loadedProjects.isEmpty && project.isEmpty {
+                        self.project = loadedProjects[0].id
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.isLoadingProjects = false
+                    self.loadError = error.localizedDescription
+                }
+            }
+        }
+    }
+    
+    private func loadModelVersions(workspace: String, project: String) {
+        isLoadingVersions = true
+        loadError = nil
+        
+        Task {
+            do {
+                let versions = try await ModelManager.shared.listModelVersions(workspace: workspace, project: project)
+                await MainActor.run {
+                    self.modelVersions = versions
+                    self.isLoadingVersions = false
+                    
+                    if !versions.isEmpty && modelVersion.isEmpty {
+                        self.modelVersion = versions.last?.id ?? ""
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.isLoadingVersions = false
+                    self.loadError = error.localizedDescription
+                }
+            }
+        }
+    }
+    
+    private func downloadModel() {
+        guard !modelWorkspace.isEmpty, !modelProject.isEmpty, !modelVersion.isEmpty else {
+            return
+        }
+        
+        Task {
+            do {
+                try await ModelManager.shared.downloadModel(
+                    workspace: modelWorkspace,
+                    project: modelProject,
+                    version: modelVersion
+                )
+            } catch {
+                await MainActor.run {
+                    loadError = error.localizedDescription
+                }
+            }
         }
     }
 }
