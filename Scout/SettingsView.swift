@@ -315,6 +315,14 @@ struct SettingsView: View {
                                         Text(version.displayName).tag(version.id)
                                     }
                                 }
+                                .onChange(of: modelVersion) { newVersion in
+                                    // Clear old model when version changes (prevents running stale model)
+                                    let versionNum = newVersion.split(separator: "/").last.map(String.init) ?? newVersion
+                                    if modelManager.currentModel != nil && modelManager.loadedVersion != versionNum {
+                                        modelManager.currentModel = nil
+                                        modelManager.currentVNCoreMLModel = nil
+                                    }
+                                }
                                 
                                 if !modelVersion.isEmpty && !modelWorkspace.isEmpty && !modelProject.isEmpty {
                                     // Check if the loaded model matches the selected version (strip to slugs)
@@ -525,6 +533,9 @@ struct SettingsView: View {
                     // Ignore stale results from canceled/superseded load
                     guard self.loadGeneration == expectedGeneration else { return }
                     
+                    // Check if picker was visible (SwiftUI doesn't fire onChange for starting value)
+                    let pickerWasVisible = !self.projects.isEmpty
+                    
                     self.projects = loadedProjects
                     self.isLoadingProjects = false
                     
@@ -539,8 +550,8 @@ struct SettingsView: View {
                         let alreadySelected = self.selectedModelProject?.id == saved.id
                         self.previousModelProject = saved  // Set previous to avoid clearing on first switch
                         self.selectedModelProject = saved
-                        // Only call loadModelVersions directly if selection unchanged (onChange won't fire)
-                        if alreadySelected && !modelWorkspace.isEmpty {
+                        // Call directly if onChange won't fire (unchanged selection or picker didn't exist)
+                        if (alreadySelected || !pickerWasVisible) && !modelWorkspace.isEmpty {
                             loadModelVersions(workspace: modelWorkspace, project: saved.id)
                         }
                     }
@@ -585,6 +596,11 @@ struct SettingsView: View {
             } catch {
                 await MainActor.run {
                     guard self.loadGeneration == expectedGeneration else { return }
+                    // Don't set error if project deselected (mirror success path project check)
+                    guard self.selectedModelProject?.id == project else {
+                        self.isLoadingVersions = false
+                        return
+                    }
                     self.isLoadingVersions = false
                     self.loadError = error.localizedDescription
                 }
