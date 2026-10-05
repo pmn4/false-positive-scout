@@ -142,8 +142,13 @@ class OAuthManager: NSObject, ObservableObject {
         deleteFromKeychain(key: refreshTokenKey)
         UserDefaults.standard.removeObject(forKey: tokenExpiryKey)
         
-        DispatchQueue.main.async {
+        // Set flag synchronously (not deferred async) so getAuthMethod sees it immediately
+        if Thread.isMainThread {
             self.isAuthenticated = false
+        } else {
+            DispatchQueue.main.sync {
+                self.isAuthenticated = false
+            }
         }
     }
     

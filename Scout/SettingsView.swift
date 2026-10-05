@@ -25,6 +25,7 @@ struct SettingsView: View {
     @State private var isLoadingProjects = false
     @State private var isLoadingVersions = false
     @State private var loadError: String?
+    @State private var loadGeneration = 0  // Track async load generation to ignore stale results
     
     // Helper to determine active auth method
     private var authStatus: String {
@@ -76,6 +77,7 @@ struct SettingsView: View {
                             modelVersions = []
                             isLoadingProjects = false
                             isLoadingVersions = false
+                            loadGeneration += 1  // Cancel in-flight loads
                             // Clear previous* BEFORE selected* to prevent isRealChange wipe
                             previousWorkspace = nil
                             previousModelProject = nil
@@ -281,8 +283,13 @@ struct SettingsView: View {
                                     
                                     loadModelVersions(workspace: ws.url, project: proj.id)
                                 } else if isRealChange {
+                                    // Deselecting project: clear versions and unload model (mirror non-nil clear)
                                     modelVersions = []
                                     modelVersion = ""
+                                    modelProject = ""
+                                    modelWorkspace = ""
+                                    modelManager.currentModel = nil
+                                    modelManager.currentVNCoreMLModel = nil
                                 }
                                 
                                 previousModelProject = newProject
@@ -498,11 +505,16 @@ struct SettingsView: View {
     private func loadProjects(workspace: String) {
         isLoadingProjects = true
         loadError = nil
+        loadGeneration += 1
+        let expectedGeneration = loadGeneration
         
         Task {
             do {
                 let loadedProjects = try await RoboflowService.shared.listProjects(workspace: workspace)
                 await MainActor.run {
+                    // Ignore stale results from canceled/superseded load
+                    guard self.loadGeneration == expectedGeneration else { return }
+                    
                     self.projects = loadedProjects
                     self.isLoadingProjects = false
                     
@@ -534,11 +546,17 @@ struct SettingsView: View {
     private func loadModelVersions(workspace: String, project: String) {
         isLoadingVersions = true
         loadError = nil
+        loadGeneration += 1
+        let expectedGeneration = loadGeneration
         
         Task {
             do {
                 let versions = try await ModelManager.shared.listModelVersions(workspace: workspace, project: project)
                 await MainActor.run {
+                    // Ignore stale results and mismatched project (rapid A→B→A switches)
+                    guard self.loadGeneration == expectedGeneration,
+                          self.selectedModelProject?.id == project else { return }
+                    
                     self.modelVersions = versions
                     self.isLoadingVersions = false
                     
@@ -548,6 +566,7 @@ struct SettingsView: View {
                 }
             } catch {
                 await MainActor.run {
+                    guard self.loadGeneration == expectedGeneration else { return }
                     self.isLoadingVersions = false
                     self.loadError = error.localizedDescription
                 }
