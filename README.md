@@ -20,7 +20,7 @@ When training object detection models, it's important to include negative exampl
 
 - 📱 **Native iOS App** – Built with SwiftUI for iPhone
 - 🧠 **On-Device Inference** – Runs object detection models locally via Core ML (no network required after download)
-- 🔒 **OAuth 2.1 Authentication** – Secure Sign in with Roboflow using PKCE
+- 🔒 **Dual Authentication** – OAuth 2.1 (PKCE) or API key (clone-and-build friendly)
 - 📷 **Front & Back Camera** – Switch between cameras on the fly
 - 🎥 **Hold-to-Record** – Only saves frames while you hold the record button
 - 🎯 **Smart Deduplication** – Uses perceptual hashing to skip similar frames
@@ -43,6 +43,15 @@ When training object detection models, it's important to include negative exampl
 
 ## Getting Started
 
+Scout offers **two authentication options**:
+
+1. **OAuth 2.1 (Recommended for production):** Sign in with Roboflow via Universal Links
+2. **API Key (Quick clone-and-build):** Paste an API key — no OAuth setup needed
+
+Choose the path that fits your workflow. OAuth is preferred for App Store distribution and provides better security, but API key is faster for local testing.
+
+---
+
 ### Installation
 
 1. **Clone the repository:**
@@ -61,7 +70,9 @@ When training object detection models, it's important to include negative exampl
    - Press `Cmd+R` to build and run
    - Accept camera permission when prompted
 
-### Configuration
+---
+
+## Configuration Path 1: OAuth (Recommended)
 
 #### 1. Set Up Universal Links for OAuth Redirect
 
@@ -162,6 +173,38 @@ Scout uses **https://** redirect URIs via iOS Universal Links (required by Robof
 8. **Adjust detection threshold (optional):**
    - Set **Confidence Threshold** (default: 40%)
    - Lower values capture more detections, including weak false positives
+
+---
+
+## Configuration Path 2: API Key (Quick Setup)
+
+**No OAuth, no Universal Links, no AASA hosting required.** Ideal for clone-and-build or quick testing.
+
+1. **Get your Roboflow API key:**
+   - Log in to [Roboflow](https://app.roboflow.com)
+   - Go to **Settings > API**
+   - Copy your API key
+
+2. **Configure Scout:**
+   - Open Scout and tap the **Settings** tab
+   - Scroll to **Authentication (Option 2: API Key)**
+   - Paste your **API Key**
+   - Enter your **Project ID** (from your project URL, e.g., `my-project`)
+
+3. **Download an on-device model:**
+   - Under **On-Device Detection Model**, you still need OAuth for listing models
+   - **Alternative:** If you don't want OAuth at all:
+     - Download a Core ML model manually from Roboflow (export as CoreML)
+     - Use the Roboflow iOS SDK directly (not covered in this quick path)
+     - For now, use OAuth just for model download, then sign out and use API key for uploads
+
+4. **Start scouting:**
+   - API key will be used for upload, tagging, nullify, and batch creation
+   - All features work the same as OAuth path
+
+**Note:** OAuth takes priority. If you're signed in with OAuth, the API key is ignored. Sign out to use API key.
+
+---
 
 ### Usage
 

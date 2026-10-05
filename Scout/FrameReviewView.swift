@@ -280,6 +280,7 @@ struct ExportSheet: View {
     @EnvironmentObject var frameStorage: FrameStorage
     @ObservedObject var oauthManager = OAuthManager.shared
     @AppStorage("scout_project") private var project: String = ""
+    @AppStorage("scout_api_key") private var apiKey: String = ""
     
     // "Half real, half incredible, like a myth that's legible" ~Nas (probably)
     // Track upload state for retry
@@ -409,8 +410,8 @@ struct ExportSheet: View {
                             .padding(.horizontal)
                     }
                     
-                    if !oauthManager.isAuthenticated || project.isEmpty {
-                        Text("⚠️ Sign in with Roboflow and select a Project in Settings")
+                    if (!oauthManager.isAuthenticated && apiKey.isEmpty) || project.isEmpty {
+                        Text("⚠️ Sign in with Roboflow OR configure API key + Project in Settings")
                             .font(.caption)
                             .foregroundColor(.orange)
                             .multilineTextAlignment(.center)
@@ -424,10 +425,10 @@ struct ExportSheet: View {
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(isUploading || !oauthManager.isAuthenticated || project.isEmpty ? Color.gray : Color.blue)
+                            .background(isUploading || (!oauthManager.isAuthenticated && apiKey.isEmpty) || project.isEmpty ? Color.gray : Color.blue)
                             .cornerRadius(12)
                     }
-                    .disabled(isUploading || !oauthManager.isAuthenticated || project.isEmpty)
+                    .disabled(isUploading || (!oauthManager.isAuthenticated && apiKey.isEmpty) || project.isEmpty)
                     .padding(.horizontal)
                 }
                 
@@ -448,8 +449,8 @@ struct ExportSheet: View {
     }
     
     private func uploadFrames() {
-        guard !project.isEmpty, oauthManager.isAuthenticated else {
-            errorMessage = "Please sign in with Roboflow and select a project"
+        guard !project.isEmpty, (oauthManager.isAuthenticated || !apiKey.isEmpty) else {
+            errorMessage = "Please sign in with Roboflow OR configure API key + Project"
             return
         }
         
@@ -488,7 +489,8 @@ struct ExportSheet: View {
                             imageName: imageName,
                             imageWidth: Int(image.size.width),
                             imageHeight: Int(image.size.height),
-                            project: project
+                            project: project,
+                            apiKey: apiKey.isEmpty ? nil : apiKey
                         )
                         
                         // Full success - remove from review list
@@ -517,7 +519,8 @@ struct ExportSheet: View {
                             imageName: imageName,
                             project: project,
                             tag: RoboflowService.defaultUploadTag,
-                            batchName: batchName
+                            batchName: batchName,
+                            apiKey: apiKey.isEmpty ? nil : apiKey
                         )
                         
                         // Mark as uploaded
@@ -532,7 +535,8 @@ struct ExportSheet: View {
                                 imageName: imageName,
                                 imageWidth: Int(image.size.width),
                                 imageHeight: Int(image.size.height),
-                                project: project
+                                project: project,
+                                apiKey: apiKey.isEmpty ? nil : apiKey
                             )
                             
                             // Full success - remove from review list
@@ -590,7 +594,8 @@ struct ExportSheet: View {
                         imageName: partial.imageName,
                         imageWidth: Int(partial.image.size.width),
                         imageHeight: Int(partial.image.size.height),
-                        project: project
+                        project: project,
+                        apiKey: apiKey.isEmpty ? nil : apiKey
                     )
                     
                     retrySuccesses += 1

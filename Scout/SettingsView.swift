@@ -5,6 +5,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage("scout_project") private var project: String = ""
+    @AppStorage("scout_api_key") private var apiKey: String = ""
     @AppStorage("scout_model_workspace") private var modelWorkspace: String = ""
     @AppStorage("scout_model_project") private var modelProject: String = ""
     @AppStorage("scout_model_version") private var modelVersion: String = ""
@@ -23,13 +24,36 @@ struct SettingsView: View {
     @State private var isLoadingVersions = false
     @State private var loadError: String?
     
+    // Helper to determine active auth method
+    private var authStatus: String {
+        if oauthManager.isAuthenticated {
+            return "OAuth (Signed In)"
+        } else if !apiKey.isEmpty {
+            return "API Key"
+        } else {
+            return "Not Configured"
+        }
+    }
+    
     var body: some View {
         NavigationView {
             Form {
                 Section {
-                    Text("Sign in with Roboflow to upload null frames and improve your object detection model.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Sign in with Roboflow (OAuth) or paste an API key for quick setup.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        HStack {
+                            Text("Active Auth:")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(authStatus)
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(oauthManager.isAuthenticated ? .green : (!apiKey.isEmpty ? .orange : .red))
+                        }
+                    }
                 } header: {
                     Text("About")
                 }
@@ -82,9 +106,52 @@ struct SettingsView: View {
                         }
                     }
                 } header: {
-                    Text("Authentication")
+                    Text("Authentication (Option 1: OAuth)")
                 } footer: {
-                    Text("OAuth authentication with workspace:read, project:read, image:create, image:annotate, and model:infer scopes")
+                    Text("Preferred for production. Requires OAuth app setup with 9 scopes. Takes priority over API key when signed in.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("API Key")
+                            .font(.headline)
+                        
+                        SecureField("Your Roboflow API key", text: $apiKey)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .disabled(oauthManager.isAuthenticated)
+                        
+                        if oauthManager.isAuthenticated {
+                            Text("⚠️ API key ignored while signed in with OAuth")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        } else {
+                            Text("Alternative to OAuth. Get from Roboflow Settings > API")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Project ID")
+                            .font(.headline)
+                        
+                        TextField("my-project", text: $project)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        
+                        Text("Required for upload when using API key (optional for OAuth)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                } header: {
+                    Text("Authentication (Option 2: API Key)")
+                } footer: {
+                    Text("Quick clone-and-build path. No OAuth or Universal Links setup needed. Get API key from app.roboflow.com/settings/api")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

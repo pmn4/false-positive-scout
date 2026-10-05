@@ -38,15 +38,44 @@ class RoboflowService {
     
     private init() {}
     
-    // MARK: - OAuth-based methods
+    // MARK: - Auth Strategy
+    
+    // Determine auth method: prefer OAuth, fall back to API key
+    enum AuthMethod {
+        case oauth(token: String)
+        case apiKey(key: String)
+        case none
+    }
+    
+    private func getAuthMethod(apiKey: String? = nil) async -> AuthMethod {
+        // Try OAuth first if signed in
+        if OAuthManager.shared.isAuthenticated {
+            if let token = try? await OAuthManager.shared.getAccessToken() {
+                return .oauth(token: token)
+            }
+        }
+        
+        // Fall back to API key if provided and not signed in
+        if let key = apiKey, !key.isEmpty {
+            return .apiKey(key: key)
+        }
+        
+        return .none
+    }
+    
+    // MARK: - Workspace & Project Discovery (OAuth or API key)
     
     // List all workspaces accessible to the authenticated user
-    func listWorkspaces() async throws -> [Workspace] {
-        let accessToken = try await OAuthManager.shared.getAccessToken()
+    func listWorkspaces(apiKey: String? = nil) async throws -> [Workspace] {
+        let auth = await getAuthMethod(apiKey: apiKey)
+        
+        guard case .oauth(let token) = auth else {
+            throw RoboflowError.authenticationRequired
+        }
         
         let url = URL(string: "https://api.roboflow.com/")!
         var request = URLRequest(url: url)
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
@@ -61,12 +90,23 @@ class RoboflowService {
     }
     
     // List all projects in a workspace
-    func listProjects(workspace: String) async throws -> [Project] {
-        let accessToken = try await OAuthManager.shared.getAccessToken()
+    func listProjects(workspace: String, apiKey: String? = nil) async throws -> [Project] {
+        let auth = await getAuthMethod(apiKey: apiKey)
         
-        let url = URL(string: "https://api.roboflow.com/\(workspace)")!
+        var url = URL(string: "https://api.roboflow.com/\(workspace)")!
         var request = URLRequest(url: url)
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        
+        switch auth {
+        case .oauth(let token):
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        case .apiKey(let key):
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+            components.queryItems = [URLQueryItem(name: "api_key", value: key)]
+            url = components.url!
+            request.url = url
+        case .none:
+            throw RoboflowError.authenticationRequired
+        }
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
@@ -75,7 +115,6 @@ class RoboflowService {
             throw RoboflowError.apiError(statusCode: 0, message: "Failed to fetch projects")
         }
         
-        let decoder = JSONDecoder()
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let projectsDict = json["workspace"] as? [String: Any],
            let projectsArray = projectsDict["projects"] as? [[String: Any]] {
@@ -99,15 +138,31 @@ class RoboflowService {
     // Default tag for Scout uploads (configurable)
     static let defaultUploadTag = "scout"
     
-    // Upload image to Roboflow project using OAuth access token
+    // Upload image to Roboflow project using OAuth or API key
     func uploadImage(
         image: UIImage,
         imageName: String,
         project: String,
         tag: String? = defaultUploadTag,
-        batchName: String? = nil
+        batchName: String? = nil,
+        apiKey: String? = nil
     ) async throws -> String {
-        let accessToken = try await OAuthManager.shared.getAccessToken()
+        let auth = await getAuthMethod(apiKey: apiKey)
+        
+        guard case .oauth(let token) = auth, true else {
+            // API key path exists but requires different handling
+            if case .apiKey(let key) = auth {
+                return try await uploadImageWithAPIKey(
+                    image: image,
+                    imageName: imageName,
+                    project: project,
+                    tag: tag,
+                    batchName: batchName,
+                    apiKey: key
+                )
+            }
+            throw RoboflowError.authenticationRequired
+        }
         
         guard let imageData = image.jpegData(compressionQuality: 0.8) else {
             throw RoboflowError.imageConversionFailed
@@ -135,7 +190,7 @@ class RoboflowService {
         var request = URLRequest(url: uploadURL)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         
         request.httpBody = base64String.data(using: .utf8)
         
@@ -161,7 +216,66 @@ class RoboflowService {
         throw RoboflowError.uploadFailed(message: "No image ID returned")
     }
     
-    // Tag an uploaded image (using image:tag scope)
+    // Upload image using API key (fallback when not signed in)
+    private func uploadImageWithAPIKey(
+        image: UIImage,
+        imageName: String,
+        project: String,
+        tag: String?,
+        batchName: String?,
+        apiKey: String
+    ) async throws -> String {
+        guard let imageData = image.jpegData(compressionQuality: 0.8) else {
+            throw RoboflowError.imageConversionFailed
+        }
+        
+        let base64String = imageData.base64EncodedString()
+        
+        var components = URLComponents(string: "https://api.roboflow.com/dataset/\(project)/upload")!
+        var queryItems = [
+            URLQueryItem(name: "api_key", value: apiKey),
+            URLQueryItem(name: "name", value: imageName),
+            URLQueryItem(name: "split", value: "train")
+        ]
+        
+        if let batchName = batchName, !batchName.isEmpty {
+            queryItems.append(URLQueryItem(name: "batch", value: batchName))
+        }
+        
+        components.queryItems = queryItems
+        
+        guard let uploadURL = components.url else {
+            throw RoboflowError.invalidURL
+        }
+        
+        var request = URLRequest(url: uploadURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = base64String.data(using: .utf8)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Upload failed"
+            throw RoboflowError.uploadFailed(message: errorMessage)
+        }
+        
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let imageId = json["id"] as? String {
+            
+            // Tag if provided (best effort with API key)
+            if let tag = tag, !tag.isEmpty {
+                try? await tagImageWithAPIKey(imageId: imageId, project: project, tag: tag, apiKey: apiKey)
+            }
+            
+            return imageId
+        }
+        
+        throw RoboflowError.uploadFailed(message: "No image ID returned")
+    }
+    
+    // Tag an uploaded image (OAuth Bearer token)
     private func tagImage(imageId: String, project: String, tag: String) async throws {
         let accessToken = try await OAuthManager.shared.getAccessToken()
         
@@ -174,21 +288,35 @@ class RoboflowService {
         
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
-            // Tagging failure is non-critical, just log it
             print("Warning: Failed to tag image \(imageId) with tag '\(tag)'")
         }
     }
     
-    // Annotate image as null using COCO JSON format with OAuth Bearer token
+    // Tag an uploaded image (API key)
+    private func tagImageWithAPIKey(imageId: String, project: String, tag: String, apiKey: String) async throws {
+        let url = URL(string: "https://api.roboflow.com/dataset/\(project)/\(imageId)/tag?tag=\(tag)&api_key=\(apiKey)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            print("Warning: Failed to tag image \(imageId) with tag '\(tag)'")
+        }
+    }
+    
+    // Annotate image as null using COCO JSON format (OAuth or API key)
     // Matches Roboflow CLI/SDK mechanism for marking null/negative examples
     func annotateAsNull(
         imageId: String,
         imageName: String,
         imageWidth: Int,
         imageHeight: Int,
-        project: String
+        project: String,
+        apiKey: String? = nil
     ) async throws {
-        let accessToken = try await OAuthManager.shared.getAccessToken()
+        let auth = await getAuthMethod(apiKey: apiKey)
         
         // Build COCO JSON with image but no annotations (null example)
         let cocoJson: [String: Any] = [
@@ -214,6 +342,13 @@ class RoboflowService {
             URLQueryItem(name: "name", value: "\(imageName).coco.json")
         ]
         
+        // Add API key to query if using API key auth
+        if case .apiKey(let key) = auth {
+            components.queryItems?.append(URLQueryItem(name: "api_key", value: key))
+        } else if case .none = auth {
+            throw RoboflowError.authenticationRequired
+        }
+        
         guard let annotateURL = components.url else {
             throw RoboflowError.invalidURL
         }
@@ -221,7 +356,11 @@ class RoboflowService {
         var request = URLRequest(url: annotateURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        
+        // Add Bearer token if using OAuth
+        if case .oauth(let token) = auth {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         
         let payload: [String: Any] = [
             "annotationFile": cocoJsonString,
@@ -260,6 +399,7 @@ class RoboflowService {
 }
 
 enum RoboflowError: LocalizedError {
+    case authenticationRequired
     case imageConversionFailed
     case invalidURL
     case invalidResponse
@@ -269,6 +409,8 @@ enum RoboflowError: LocalizedError {
     
     var errorDescription: String? {
         switch self {
+        case .authenticationRequired:
+            return "Please sign in with Roboflow or configure an API key in Settings"
         case .imageConversionFailed:
             return "Failed to process image"
         case .invalidURL:
