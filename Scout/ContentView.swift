@@ -6,8 +6,10 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var frameStorage: FrameStorage
     @AppStorage("scout_confidence") private var confidence: Int = 40
+    @StateObject private var oauthManager = OAuthManager.shared
     
     @State private var selectedTab = 0
+    @State private var hasCheckedInitialAuth = false
     
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -29,6 +31,20 @@ struct ContentView: View {
                     Label("Settings", systemImage: "gear")
                 }
                 .tag(2)
+        }
+        .onAppear {
+            // On first launch, if user isn't authenticated, open Settings tab
+            // so they can sign in right away
+            if !hasCheckedInitialAuth {
+                hasCheckedInitialAuth = true
+                
+                let apiKey = KeychainHelper.loadAPIKey() ?? ""
+                let isConfigured = oauthManager.isAuthenticated || !apiKey.isEmpty
+                
+                if !isConfigured {
+                    selectedTab = 2 // Settings tab
+                }
+            }
         }
     }
 }
