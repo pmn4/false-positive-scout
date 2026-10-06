@@ -2,19 +2,19 @@ import Foundation
 
 /// OAuth configuration - controls whether Sign in with Roboflow is available
 /// 
-/// OAuth requires:
-/// - Paid Apple Developer Program membership (Associated Domains capability)
-/// - apple-app-site-association file hosted at https://pmnewell.com/.well-known/
-/// - Roboflow OAuth app registered with redirect URI
+/// OAuth works with FREE Apple Personal Team via custom URL scheme relay:
+/// - Redirect URI: https://pmnewell.com/false-positive-scout/oauth/callback
+/// - Relay page immediately forwards to: scout://oauth/callback?code=...&state=...
+/// - No Associated Domains capability required
+/// - No apple-app-site-association file required
 /// 
-/// Free Apple Personal Team: OAuth is NOT supported (no Associated Domains)
-/// Default: API key authentication only
+/// Default: OAuth enabled (preferred method)
 struct OAuthConfig {
     /// Enable OAuth / Sign in with Roboflow
     /// 
     /// Set to `true` to enable OAuth authentication alongside API key
     /// Requires paid Apple Developer Program and Associated Domains setup
     /// 
-    /// Default: `false` (API key only, works with free Apple Personal Team)
-    static let isEnabled = false
+    /// Default: `true` (OAuth via custom URL scheme relay, works with free Apple Personal Team)
+    static let isEnabled = true
 }

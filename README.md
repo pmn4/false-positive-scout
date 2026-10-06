@@ -43,15 +43,16 @@ When training object detection models, it's important to include negative exampl
 
 ## Getting Started
 
-Scout uses **API Key authentication** by default:
+Scout uses **OAuth 2.1 (Sign in with Roboflow)** as the primary authentication method:
 
-- **Quick setup:** Paste your Roboflow API key, no paid Apple Developer account needed
-- **Works with free Apple Personal Team** (automatic code signing)
-- OAuth 2.1 (Sign in with Roboflow) is **optional** and requires a paid Apple Developer Program membership
+- **Works with free Apple Personal Team** (no paid Apple Developer account needed)
+- Uses custom URL scheme relay (`scout://`) - no Universal Links / Associated Domains required
+- Automatic workspace and project discovery
+- **Alternative:** API Key authentication (paste key manually)
 
 ---
 
-### Quick Start (API Key)
+### Quick Start
 
 1. **Clone the repository:**
    ```bash
@@ -69,63 +70,69 @@ Scout uses **API Key authentication** by default:
    - Press `Cmd+R` to build and run (uses free Apple Personal Team T6FND7233Y)
    - Accept camera permission when prompted
 
-4. **Configure in the app:**
+4. **Sign in:**
    - Open Settings tab
-   - Paste your Roboflow API key (get from [app.roboflow.com/settings/api](https://app.roboflow.com/settings/api))
-   - Enter your project ID (e.g., `my-workspace/my-project` or just `my-project`)
+   - Tap "Sign in with Roboflow"
+   - Log in to Roboflow in the browser
+   - Select your workspace and project from the pickers
    - Download your model and start scanning
+
+**Alternative (API Key):**
+- Instead of signing in, scroll to "Use an API key instead"
+- Paste your Roboflow API key (get from [app.roboflow.com/settings/api](https://app.roboflow.com/settings/api))
+- Enter your project ID (e.g., `my-workspace/my-project` or just `my-project`)
+- Download your model and start scanning
 
 ---
 
-## Optional: Enable OAuth (Paid Apple Developer Program Required)
+## How OAuth Works (Custom URL Scheme Relay)
 
-OAuth (Sign in with Roboflow) is **disabled by default** because it requires:
-- Paid Apple Developer Program membership ($99/year)
-- Associated Domains capability (not available with free Personal Team)
-- Universal Links and AASA file hosting
+Scout uses a **custom URL scheme relay** for OAuth, which works with **free Apple Personal Teams**:
 
-**To enable OAuth:**
+### OAuth Flow
 
-#### 1. Enable OAuth in Code
+1. User taps "Sign in with Roboflow"
+2. App opens Roboflow authorization page in Safari
+3. User logs in and approves access
+4. Roboflow redirects to: `https://pmnewell.com/false-positive-scout/oauth/callback?code=...&state=...`
+5. **Relay page** (static HTML at that URL) immediately forwards to: `scout://oauth/callback?code=...&state=...`
+6. iOS opens Scout app via the `scout://` custom URL scheme
+7. App validates state (PKCE) and exchanges code for tokens
 
-Open `Scout/OAuthConfig.swift` and change:
-```swift
-static let isEnabled = false
+**No Universal Links. No Associated Domains capability. No AASA file. Works with free Personal Team.**
+
+### The Relay Page
+
+The relay page at `https://pmnewell.com/false-positive-scout/oauth/callback` is a static HTML page that:
+- Reads all query parameters from the URL (`code`, `state`, `error`, `error_description`)
+- Immediately redirects to `scout://oauth/callback` with the same parameters
+- Is maintained in the `pmn4/pmn4.github.io` repository (Patrick's site repository)
+
+**Example relay code:**
+```html
+<script>
+  const params = new URLSearchParams(window.location.search);
+  window.location = 'scout://oauth/callback?' + params.toString();
+</script>
 ```
-to:
-```swift
-static let isEnabled = true
-```
 
-#### 2. Add Associated Domains Capability
+### Forking Scout with Your Own Relay
 
-**This requires a paid Apple Developer Program account:**
+If you fork Scout and want your own OAuth setup:
 
-1. Open `Scout.xcodeproj` in Xcode
-2. Select the **Scout** target
-3. Go to **Signing & Capabilities** tab
-4. Update your Team to your paid Apple Developer Program team
-5. Click **+ Capability** and add **Associated Domains**
-6. Add domain: `applinks:pmnewell.com` (or `applinks:yourdomain.com` if hosting your own AASA)
-7. Enable the entitlements: in project build settings, set `CODE_SIGN_ENTITLEMENTS = Scout/Scout.entitlements`
+1. **Host your own relay page:**
+   - Create a static page at `https://yourdomain.com/your-path/oauth/callback`
+   - Copy the relay script above (forward to `scout://oauth/callback` with query params)
+   - Host it on GitHub Pages, Vercel, Netlify, or any static hosting
 
-#### 3. Host apple-app-site-association File
+2. **Update the redirect URI in Scout:**
+   - Open `Scout/OAuthManager.swift`
+   - Change `redirectURI` to your relay page URL: `https://yourdomain.com/your-path/oauth/callback`
 
-Scout's default redirect URI is `https://pmnewell.com/false-positive-scout/oauth/callback`.
+3. **Register your redirect URI with Roboflow:**
+   - Follow the steps below to create a Roboflow OAuth app
 
-**Option A: Use pmnewell.com (testing):**
-- AASA is already hosted at `https://pmnewell.com/.well-known/apple-app-site-association`
-- See `docs/apple-app-site-association` for reference template
-- Skip to step 4
-
-**Option B: Use your own domain:**
-1. Copy template from `docs/apple-app-site-association`
-2. Replace `<TEAMID>` with your Apple Developer Team ID
-3. Host at `https://yourdomain.com/.well-known/apple-app-site-association`
-4. Update `redirectURI` in `Scout/OAuthManager.swift` to match your domain
-5. Update Associated Domains in Xcode to `applinks:yourdomain.com`
-
-#### 4. Register a Roboflow OAuth App
+### Registering a Roboflow OAuth App
 
 1. **Open Roboflow Developer Settings:**
    - Log in to [Roboflow](https://app.roboflow.com)

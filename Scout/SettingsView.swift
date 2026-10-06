@@ -119,9 +119,9 @@ struct SettingsView: View {
                         }
                     }
                     } header: {
-                        Text("Authentication (Option 1: OAuth)")
+                        Text("Authentication")
                     } footer: {
-                        Text("Preferred for production. Requires OAuth app setup with 9 scopes. Takes priority over API key when signed in.")
+                        Text("Recommended: Sign in with Roboflow for automatic workspace/project discovery. Works with free Apple Personal Team (no paid developer account needed).")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -163,9 +163,9 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 4)
                 } header: {
-                    Text(OAuthConfig.isEnabled ? "Authentication (Option 2: API Key)" : "Authentication (API Key)")
+                    Text("Use an API key instead")
                 } footer: {
-                    Text(OAuthConfig.isEnabled ? "Quick clone-and-build path. No OAuth or Universal Links setup needed. Get API key from app.roboflow.com/settings/api" : "Get API key from app.roboflow.com/settings/api. Works with free Apple Personal Team (no paid developer account needed).")
+                    Text("Alternative to OAuth. Get API key from app.roboflow.com/settings/api. OAuth takes priority when signed in.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

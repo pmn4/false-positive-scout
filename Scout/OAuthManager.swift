@@ -94,7 +94,7 @@ class OAuthManager: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 self.authSession = ASWebAuthenticationSession(
                     url: authURL,
-                    callbackURLScheme: "https"
+                    callbackURLScheme: "scout"
                 ) { callbackURL, error in
                     if let error = error {
                         // Clear PKCE session state on error
@@ -206,9 +206,18 @@ class OAuthManager: NSObject, ObservableObject {
         }
         
         guard let code = queryItems.first(where: { $0.name == "code" })?.value else {
-            // Check for error
+            // Check for error from OAuth provider or relay page
             if let error = queryItems.first(where: { $0.name == "error" })?.value {
-                throw OAuthError.authorizationFailed(error)
+                let errorDescription = queryItems.first(where: { $0.name == "error_description" })?.value
+                let friendlyMessage: String
+                if error == "access_denied" {
+                    friendlyMessage = "Sign in canceled or access denied"
+                } else if let description = errorDescription {
+                    friendlyMessage = "\(error): \(description)"
+                } else {
+                    friendlyMessage = error
+                }
+                throw OAuthError.authorizationFailed(friendlyMessage)
             }
             throw OAuthError.noAuthorizationCode
         }
