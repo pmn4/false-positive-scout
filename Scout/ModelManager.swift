@@ -30,6 +30,7 @@ class ModelManager: ObservableObject {
     @Published var loadedWorkspace: String?
     @Published var loadedProject: String?
     @Published var loadedVersion: String?
+    @Published var classLabels: [String] = []
     
     private let fileManager = FileManager.default
     
@@ -222,6 +223,8 @@ class ModelManager: ObservableObject {
         // Build VNCoreMLModel once for reuse per frame
         let vnModel = try VNCoreMLModel(for: mlModel)
         
+        let extractedLabels = extractClassLabels(from: mlModel)
+        
         await MainActor.run {
             // Validate target still matches AppStorage (user may have switched workspace/project during download)
             let currentWorkspace = UserDefaults.standard.string(forKey: "scout_model_workspace") ?? ""
@@ -242,11 +245,37 @@ class ModelManager: ObservableObject {
             
             self.currentModel = mlModel
             self.currentVNCoreMLModel = vnModel
+            self.classLabels = extractedLabels
             // Track loaded model identity for UI validation
             self.loadedWorkspace = workspace
             self.loadedProject = project
             self.loadedVersion = version
         }
+    }
+    
+    private func extractClassLabels(from model: MLModel) -> [String] {
+        let description = model.modelDescription
+        
+        if let outputNames = description.outputDescriptionsByName.keys.first(where: { key in
+            let output = description.outputDescriptionsByName[key]
+            return output?.type == .multiArray || output?.type == .dictionary
+        }),
+           let output = description.outputDescriptionsByName[outputNames],
+           let classLabels = output.classLabels as? [String] {
+            return classLabels
+        }
+        
+        if let metadata = description.metadata[.creatorDefinedKey] as? [String: Any],
+           let labels = metadata["classes"] as? [String] {
+            return labels
+        }
+        
+        if let userDefined = description.metadata[.description] as? String,
+           userDefined.contains("classes") {
+            return []
+        }
+        
+        return []
     }
     
     // MARK: - Cache Management
@@ -301,7 +330,7 @@ class ModelManager: ObservableObject {
     
     // MARK: - Inference
     
-    func detect(image: UIImage, confidenceThreshold: Float = 0.4) async throws -> [Detection] {
+    func detect(image: UIImage, thresholdManager: ThresholdManager = ThresholdManager.shared) async throws -> [Detection] {
         guard let vnModel = currentVNCoreMLModel else {
             throw ModelError.noModelLoaded
         }
@@ -337,8 +366,10 @@ class ModelManager: ObservableObject {
                 score = min(Double(observation.confidence) * Double(topLabel.confidence), 1.0)
             }
             
+            let effectiveThreshold = Double(thresholdManager.effectiveThreshold(for: className))
+            
             // Skip zeroed NMS rows and low confidence (score > 0 prevents 0% threshold from passing zeroed rows)
-            guard score > 0, score >= Double(confidenceThreshold) else { return nil }
+            guard score > 0, score >= effectiveThreshold else { return nil }
             
             let boundingBox = observation.boundingBox
             let imageWidth = Double(image.size.width)

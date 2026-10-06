@@ -8,7 +8,6 @@ struct SettingsView: View {
     @AppStorage("scout_model_workspace") private var modelWorkspace: String = ""
     @AppStorage("scout_model_project") private var modelProject: String = ""
     @AppStorage("scout_model_version") private var modelVersion: String = ""
-    @AppStorage("scout_confidence") private var confidence: Int = 40
     
     @ObservedObject var oauthManager = OAuthManager.shared
     @ObservedObject var modelManager = ModelManager.shared
@@ -438,30 +437,6 @@ struct SettingsView: View {
                     }
                 }
                 
-                
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Confidence Threshold")
-                                .font(.headline)
-                            Spacer()
-                            Text("\(confidence)%")
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        Slider(value: Binding(
-                            get: { Double(confidence) },
-                            set: { confidence = Int($0) }
-                        ), in: 0...100, step: 5)
-                        
-                        Text("Lower values capture more detections, including weak false positives")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                } header: {
-                    Text("Detection Settings")
-                }
                 
                 Section {
                     Link(destination: URL(string: "https://roboflow.com")!) {

@@ -7,9 +7,9 @@ import UIKit
 
 struct CameraView: View {
     @EnvironmentObject var frameStorage: FrameStorage
-    @AppStorage("scout_confidence") private var confidence: Int = 40
     
     @ObservedObject var modelManager = ModelManager.shared
+    @ObservedObject var thresholdManager = ThresholdManager.shared
     @StateObject private var cameraManager = CameraManager()
     @State private var isScanning = false
     @State private var isRecording = false
@@ -17,6 +17,7 @@ struct CameraView: View {
     @State private var lastCaptureTime: Date?
     @State private var lastSavedHash: Data?
     @State private var captureCount = 0
+    @State private var showThresholdSheet = false
     
     private let frameCheckInterval: TimeInterval = 0.5
     private let similarityThreshold: Double = 0.85
@@ -28,6 +29,17 @@ struct CameraView: View {
                     .edgesIgnoringSafeArea(.all)
                 
                 VStack {
+                    HStack {
+                        Spacer()
+                        
+                        ThresholdBadge(
+                            thresholdManager: thresholdManager,
+                            showSheet: $showThresholdSheet
+                        )
+                        .padding(.top, 60)
+                        .padding(.trailing, 16)
+                    }
+                    
                     Spacer()
                     
                     if let error = errorMessage {
@@ -146,6 +158,13 @@ struct CameraView: View {
             .onAppear {
                 cameraManager.checkPermissions()
             }
+            .sheet(isPresented: $showThresholdSheet) {
+                ThresholdControlSheet(
+                    thresholdManager: thresholdManager,
+                    modelManager: modelManager,
+                    isPresented: $showThresholdSheet
+                )
+            }
         }
     }
     
@@ -204,10 +223,7 @@ struct CameraView: View {
         }
         
         do {
-            let detections = try await modelManager.detect(
-                image: image,
-                confidenceThreshold: Float(confidence) / 100.0
-            )
+            let detections = try await modelManager.detect(image: image)
             
             // Only save if recording AND detections found AND different from last saved
             if isRecording && !detections.isEmpty {
@@ -473,6 +489,34 @@ struct CameraPreview: UIViewRepresentable {
     
     class Coordinator {
         var previewLayer: AVCaptureVideoPreviewLayer?
+    }
+}
+
+struct ThresholdBadge: View {
+    @ObservedObject var thresholdManager: ThresholdManager
+    @Binding var showSheet: Bool
+    
+    var body: some View {
+        Button(action: {
+            showSheet = true
+        }) {
+            HStack(spacing: 6) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.caption)
+                Text("\(Int(thresholdManager.overallThreshold * 100))%")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial)
+            .cornerRadius(16)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+            )
+        }
+        .foregroundColor(.primary)
     }
 }
 
