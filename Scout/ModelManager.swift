@@ -65,6 +65,14 @@ class ModelManager: ObservableObject {
     @Published var loadedProject: String?
     @Published var loadedVersion: String?
     @Published var classLabels: [String] = []
+    @Published var modelType: String?
+    
+    private enum InferenceBackend {
+        case visionObjects
+        case rfDetrTensors
+    }
+    
+    private var inferenceBackend: InferenceBackend = .visionObjects
     
     private let fileManager = FileManager.default
     
@@ -273,6 +281,12 @@ class ModelManager: ObservableObject {
             let message = json["message"] as? String ?? json["error"] as? String
             let details = message.map { ": \($0)" } ?? ""
             throw ModelError.exportFailedWithReason("No 'coreml' key in response. Available keys: \(availableKeys)\(details)")
+        }
+        
+        if let type = coremlDict["modelType"] as? String {
+            await MainActor.run {
+                self.modelType = type
+            }
         }
         
         guard let modelURLString = coremlDict["model"] as? String,
@@ -554,18 +568,42 @@ class ModelManager: ObservableObject {
     }
     
     private func loadCachedModel(from url: URL, workspace: String, project: String, version: String) async throws {
-        // YoloLite needs .cpuAndGPU (Neural Engine fp16 underflow breaks decode)
+        let probeConfig = MLModelConfiguration()
+        #if targetEnvironment(simulator)
+        probeConfig.computeUnits = .cpuOnly
+        #else
+        probeConfig.computeUnits = .cpuAndGPU
+        #endif
+        
+        let probeModel = try MLModel(contentsOf: url, configuration: probeConfig)
+        let backend = detectInferenceBackend(probeModel)
+        
         let config = MLModelConfiguration()
-        config.computeUnits = .cpuAndGPU
-        let mlModel = try MLModel(contentsOf: url, configuration: config)
+        #if targetEnvironment(simulator)
+        config.computeUnits = .cpuOnly
+        #else
+        // YoloLite needs .cpuAndGPU (Neural Engine fp16 underflow breaks decode).
+        // RF-DETR matches roboflow-swift: .cpuAndNeuralEngine.
+        config.computeUnits = (backend == .rfDetrTensors) ? .cpuAndNeuralEngine : .cpuAndGPU
+        #endif
         
-        // Build VNCoreMLModel once for reuse per frame
+        let mlModel = (backend == .rfDetrTensors) ? try MLModel(contentsOf: url, configuration: config) : probeModel
+        try await finishLoadingModel(mlModel, backend: backend, workspace: workspace, project: project, version: version)
+    }
+    
+    private func detectInferenceBackend(_ model: MLModel) -> InferenceBackend {
+        let outputNames = Set(model.modelDescription.outputDescriptionsByName.keys.map { $0.lowercased() })
+        if outputNames.contains("boxes") && outputNames.contains("scores") && outputNames.contains("labels") {
+            return .rfDetrTensors
+        }
+        return .visionObjects
+    }
+    
+    private func finishLoadingModel(_ mlModel: MLModel, backend: InferenceBackend, workspace: String, project: String, version: String) async throws {
         let vnModel = try VNCoreMLModel(for: mlModel)
-        
         let extractedLabels = extractClassLabels(from: mlModel)
         
         await MainActor.run {
-            // Validate target still matches AppStorage (user may have switched workspace/project during download)
             let currentWorkspace = UserDefaults.standard.string(forKey: "scout_model_workspace") ?? ""
             let currentProject = UserDefaults.standard.string(forKey: "scout_model_project") ?? ""
             let currentVersion = UserDefaults.standard.string(forKey: "scout_model_version") ?? ""
@@ -575,17 +613,16 @@ class ModelManager: ObservableObject {
             let currentProjectSlug = currentProject.split(separator: "/").last.map(String.init) ?? currentProject
             let currentVersionNum = currentVersion.split(separator: "/").last.map(String.init) ?? currentVersion
             
-            // Only publish if selection hasn't changed (ignore if workspace cleared or switched)
             guard currentWorkspace == workspace,
                   currentProjectSlug == projectSlugTarget,
                   currentVersionNum == versionNumTarget else {
-                return  // Selection changed, drop this load
+                return
             }
             
             self.currentModel = mlModel
             self.currentVNCoreMLModel = vnModel
             self.classLabels = extractedLabels
-            // Track loaded model identity for UI validation
+            self.inferenceBackend = backend
             self.loadedWorkspace = workspace
             self.loadedProject = project
             self.loadedVersion = version
@@ -724,57 +761,169 @@ class ModelManager: ObservableObject {
             throw ModelError.imageConversionFailed
         }
         
-        // Use cached VNCoreMLModel (built once, reused per frame)
         let request = VNCoreMLRequest(model: vnModel)
         request.imageCropAndScaleOption = .scaleFill
         
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
         try handler.perform([request])
         
-        // Accept VNDetectedObjectObservation (YOLOv5-style) or VNRecognizedObjectObservation (with labels)
-        guard let results = request.results as? [VNDetectedObjectObservation] else {
-            // Some models output feature maps requiring custom post-processing
-            throw ModelError.unsupportedModelType
+        guard let results = request.results, !results.isEmpty else {
+            return []
         }
         
-        // Convert Vision results to Detection format
-        let detections = results.compactMap { observation -> Detection? in
-            // YoloLite NMS confidence: match roboflow-swift score calculation
+        if let objectResults = results as? [VNDetectedObjectObservation] {
+            return decodeVisionObjects(
+                objectResults,
+                imageWidth: Double(image.size.width),
+                imageHeight: Double(image.size.height),
+                thresholdManager: thresholdManager
+            )
+        }
+        
+        if let featureResults = results as? [VNCoreMLFeatureValueObservation] {
+            return try decodeRFDetrTensors(
+                featureResults,
+                imageWidth: Double(image.size.width),
+                imageHeight: Double(image.size.height),
+                thresholdManager: thresholdManager
+            )
+        }
+        
+        let resultType = String(describing: type(of: results.first!))
+        let featureNames = results.compactMap { ($0 as? VNCoreMLFeatureValueObservation)?.featureName }
+        let featureInfo = featureNames.isEmpty ? "" : " (features: \(featureNames.joined(separator: ", ")))"
+        throw ModelError.unsupportedModelTypeWithReason("Unsupported result type: \(resultType)\(featureInfo)")
+    }
+    
+    private func decodeVisionObjects(
+        _ observations: [VNDetectedObjectObservation],
+        imageWidth: Double,
+        imageHeight: Double,
+        thresholdManager: ThresholdManager
+    ) -> [Detection] {
+        observations.compactMap { observation -> Detection? in
             var score = Double(observation.confidence)
             var className = "object"
             
-            // VNRecognizedObjectObservation (subclass) has labels
             if let recognized = observation as? VNRecognizedObjectObservation,
                let topLabel = recognized.labels.first {
                 className = topLabel.identifier
-                // Combine observation confidence with label confidence (NMS score)
                 score = min(Double(observation.confidence) * Double(topLabel.confidence), 1.0)
             }
             
             let effectiveThreshold = Double(thresholdManager.effectiveThreshold(for: className))
-            
-            // Skip zeroed NMS rows and low confidence (score > 0 prevents 0% threshold from passing zeroed rows)
             guard score > 0, score >= effectiveThreshold else { return nil }
             
             let boundingBox = observation.boundingBox
-            let imageWidth = Double(image.size.width)
-            let imageHeight = Double(image.size.height)
-            
-            // Vision uses normalized coordinates (0-1) with origin at bottom-left
-            // Convert to center x, y, width, height in pixel coordinates
-            let x = boundingBox.midX * imageWidth
-            let y = (1 - boundingBox.midY) * imageHeight  // Flip Y axis
-            let width = boundingBox.width * imageWidth
-            let height = boundingBox.height * imageHeight
-            
             return Detection(
-                x: x,
-                y: y,
-                width: width,
-                height: height,
+                x: boundingBox.midX * imageWidth,
+                y: (1 - boundingBox.midY) * imageHeight,
+                width: boundingBox.width * imageWidth,
+                height: boundingBox.height * imageHeight,
                 confidence: score,
                 className: className
             )
+        }
+    }
+    
+    /// RF-DETR Core ML outputs boxes/scores/labels MultiArrays (roboflow-swift RFDetrObjectDetectionModel).
+    private func decodeRFDetrTensors(
+        _ observations: [VNCoreMLFeatureValueObservation],
+        imageWidth: Double,
+        imageHeight: Double,
+        thresholdManager: ThresholdManager
+    ) throws -> [Detection] {
+        var boxesArray: MLMultiArray?
+        var scoresArray: MLMultiArray?
+        var labelsArray: MLMultiArray?
+        
+        for observation in observations {
+            switch observation.featureName.lowercased() {
+            case "boxes":
+                boxesArray = observation.featureValue.multiArrayValue
+            case "scores":
+                scoresArray = observation.featureValue.multiArrayValue
+            case "labels":
+                labelsArray = observation.featureValue.multiArrayValue
+            default:
+                break
+            }
+        }
+        
+        guard let boxes = boxesArray, let scores = scoresArray, let labels = labelsArray else {
+            let found = observations.map(\.featureName).joined(separator: ", ")
+            throw ModelError.unsupportedModelTypeWithReason("RF-DETR tensors incomplete. Found: \(found)")
+        }
+        
+        // Prefer SDK layout: scores/labels [1, N], boxes [1, N, 4]
+        let batched = boxes.shape.count == 3
+        let numDetections: Int
+        if batched {
+            numDetections = boxes.shape[1].intValue
+        } else if boxes.shape.count == 2 {
+            numDetections = boxes.shape[0].intValue
+        } else {
+            throw ModelError.unsupportedModelTypeWithReason("Unexpected boxes shape: \(boxes.shape)")
+        }
+        
+        var detections: [Detection] = []
+        detections.reserveCapacity(min(numDetections, 64))
+        
+        for i in 0..<numDetections {
+            let score: Float
+            let labelIdx: Int
+            let cx: Float
+            let cy: Float
+            let w: Float
+            let h: Float
+            
+            if batched {
+                score = scores[[0, NSNumber(value: i)] as [NSNumber]].floatValue
+                labelIdx = labels[[0, NSNumber(value: i)] as [NSNumber]].intValue
+                cx = boxes[[0, NSNumber(value: i), 0] as [NSNumber]].floatValue
+                cy = boxes[[0, NSNumber(value: i), 1] as [NSNumber]].floatValue
+                w = abs(boxes[[0, NSNumber(value: i), 2] as [NSNumber]].floatValue)
+                h = abs(boxes[[0, NSNumber(value: i), 3] as [NSNumber]].floatValue)
+            } else {
+                let scoreIdx: [NSNumber] = (scores.shape.count == 2)
+                    ? [0, NSNumber(value: i)]
+                    : [NSNumber(value: i)]
+                let labelIndex: [NSNumber] = (labels.shape.count == 2)
+                    ? [0, NSNumber(value: i)]
+                    : [NSNumber(value: i)]
+                score = scores[scoreIdx].floatValue
+                labelIdx = labels[labelIndex].intValue
+                cx = boxes[[NSNumber(value: i), 0] as [NSNumber]].floatValue
+                cy = boxes[[NSNumber(value: i), 1] as [NSNumber]].floatValue
+                w = abs(boxes[[NSNumber(value: i), 2] as [NSNumber]].floatValue)
+                h = abs(boxes[[NSNumber(value: i), 3] as [NSNumber]].floatValue)
+            }
+            
+            let className: String
+            if labelIdx >= 0 && labelIdx < classLabels.count {
+                className = classLabels[labelIdx]
+            } else {
+                className = "unknown"
+            }
+            
+            let effectiveThreshold = Float(thresholdManager.effectiveThreshold(for: className))
+            guard score > 0, score >= effectiveThreshold else { continue }
+            guard w > 0, h > 0 else { continue }
+            
+            // Match roboflow-swift: normalized center coords → pixel centers (no Vision Y flip).
+            let centerX = Double(cx) * imageWidth
+            let centerY = Double(cy) * imageHeight
+            let width = Double(w) * imageWidth
+            let height = Double(h) * imageHeight
+            
+            detections.append(Detection(
+                x: centerX,
+                y: centerY,
+                width: width,
+                height: height,
+                confidence: Double(score),
+                className: className
+            ))
         }
         
         return detections
@@ -795,6 +944,7 @@ enum ModelError: LocalizedError {
     case noModelLoaded
     case imageConversionFailed
     case unsupportedModelType
+    case unsupportedModelTypeWithReason(String)
     case authenticationRequired
     
     var errorDescription: String? {
@@ -821,6 +971,8 @@ enum ModelError: LocalizedError {
             return "Failed to convert image for inference"
         case .unsupportedModelType:
             return "This model type outputs feature maps requiring custom post-processing that is not yet implemented. Please use a different model architecture (e.g., YOLOv5, YOLOv8, or standard Vision-compatible detector)."
+        case .unsupportedModelTypeWithReason(let reason):
+            return reason
         case .authenticationRequired:
             return "Please sign in with Roboflow or configure an API key in Settings"
         }
