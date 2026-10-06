@@ -256,26 +256,65 @@ class ModelManager: ObservableObject {
     private func extractClassLabels(from model: MLModel) -> [String] {
         let description = model.modelDescription
         
-        if let outputNames = description.outputDescriptionsByName.keys.first(where: { key in
-            let output = description.outputDescriptionsByName[key]
-            return output?.type == .multiArray || output?.type == .dictionary
-        }),
-           let output = description.outputDescriptionsByName[outputNames],
-           let classLabels = output.classLabels as? [String] {
+        if let classLabels = description.classLabels as? [String] {
             return classLabels
         }
         
-        if let metadata = description.metadata[.creatorDefinedKey] as? [String: Any],
-           let labels = metadata["classes"] as? [String] {
-            return labels
-        }
-        
-        if let userDefined = description.metadata[.description] as? String,
-           userDefined.contains("classes") {
-            return []
+        if let metadata = description.metadata[.creatorDefinedKey] as? [String: String] {
+            for key in ["classes", "names", "class_labels"] {
+                if let value = metadata[key] {
+                    if let parsed = parseClassLabelsFromString(value) {
+                        return parsed
+                    }
+                }
+            }
         }
         
         return []
+    }
+    
+    private func parseClassLabelsFromString(_ value: String) -> [String]? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+            if let data = trimmed.data(using: .utf8),
+               let array = try? JSONSerialization.jsonObject(with: data) as? [String] {
+                return array
+            }
+        }
+        
+        if trimmed.hasPrefix("{") && trimmed.contains(":") {
+            let pairs = trimmed
+                .trimmingCharacters(in: CharacterSet(charactersIn: "{}"))
+                .components(separatedBy: ",")
+                .compactMap { pair -> (Int, String)? in
+                    let parts = pair.components(separatedBy: ":")
+                    guard parts.count == 2,
+                          let index = Int(parts[0].trimmingCharacters(in: .whitespacesAndNewlines)),
+                          let className = parts[1]
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                            .nilIfEmpty else {
+                        return nil
+                    }
+                    return (index, className)
+                }
+                .sorted { $0.0 < $1.0 }
+            
+            if !pairs.isEmpty {
+                return pairs.map { $0.1 }
+            }
+        }
+        
+        let commaSeparated = trimmed.components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        
+        if commaSeparated.count > 1 {
+            return commaSeparated
+        }
+        
+        return nil
     }
     
     // MARK: - Cache Management
@@ -482,5 +521,11 @@ extension UIImage {
         UIGraphicsPopContext()
         
         return buffer
+    }
+}
+
+extension String {
+    var nilIfEmpty: String? {
+        return isEmpty ? nil : self
     }
 }
