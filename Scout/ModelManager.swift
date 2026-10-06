@@ -531,10 +531,21 @@ class ModelManager: ObservableObject {
                 return false
             }) {
                 if let classMap = versionData["class_map"] as? [String: Int] {
-                    let sortedClasses = classMap.sorted { $0.value < $1.value }
-                    classNames = sortedClasses.map { $0.key }
                     print("🔵 [ScoutDetect] class_map found: \(classMap)")
-                    print("🔵 [ScoutDetect] Sorted classes by index: \(sortedClasses)")
+                    
+                    let maxIndex = classMap.values.max() ?? 0
+                    let minIndex = classMap.values.min() ?? 0
+                    print("🔵 [ScoutDetect] Index range: \(minIndex)...\(maxIndex)")
+                    
+                    var denseArray = Array(repeating: "", count: maxIndex + 1)
+                    for (name, index) in classMap {
+                        if index >= 0 && index < denseArray.count {
+                            denseArray[index] = name
+                        }
+                    }
+                    
+                    classNames = denseArray
+                    print("🔵 [ScoutDetect] Dense classLabels[\(denseArray.count)]: \(denseArray.enumerated().map { "\($0):\($1.isEmpty ? "—" : $1)" }.joined(separator: ", "))")
                 } else if let classes = versionData["classes"] as? [String] {
                     classNames = classes
                     print("🔵 [ScoutDetect] classes array: \(classes)")
@@ -1464,14 +1475,17 @@ class ModelManager: ObservableObject {
             let className: String
             let mappingNote: String
             if labelIdx >= 0 && labelIdx < classLabels.count {
-                className = classLabels[labelIdx]
-                mappingNote = "direct"
-            } else if labelIdx > 0 && (labelIdx - 1) < classLabels.count {
-                className = classLabels[labelIdx - 1]
-                mappingNote = "offset-1"
+                let name = classLabels[labelIdx]
+                if name.isEmpty {
+                    className = "unknown"
+                    mappingNote = "empty@\(labelIdx)"
+                } else {
+                    className = name
+                    mappingNote = "idx\(labelIdx)"
+                }
             } else {
                 className = "unknown"
-                mappingNote = labelIdx >= classLabels.count ? "OOB(\(labelIdx) >= \(classLabels.count))" : "negative"
+                mappingNote = labelIdx < 0 ? "negative(\(labelIdx))" : "OOB(\(labelIdx)>=\(classLabels.count))"
             }
             
             let effectiveThreshold = Float(thresholdManager.effectiveThreshold(for: className))
