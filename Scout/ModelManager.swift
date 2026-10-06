@@ -839,9 +839,162 @@ class ModelManager: ObservableObject {
         thresholdManager: ThresholdManager
     ) async throws -> [Detection] {
         let inputName = mlModel.modelDescription.inputDescriptionsByName.keys.first ?? "image"
-        let input = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: pixelBuffer)])
+        
+        guard let inputDescription = mlModel.modelDescription.inputDescriptionsByName[inputName],
+              let imageConstraint = inputDescription.imageConstraint else {
+            throw ModelError.unsupportedModelTypeWithReason("Model input has no image constraint")
+        }
+        
+        let modelWidth = imageConstraint.pixelsWide
+        let modelHeight = imageConstraint.pixelsHigh
+        
+        let resizedBuffer = try resizePixelBuffer(
+            pixelBuffer,
+            targetWidth: modelWidth,
+            targetHeight: modelHeight
+        )
+        
+        let scaleInfo = calculateRFDetrScale(
+            originalWidth: imageWidth,
+            originalHeight: imageHeight,
+            modelWidth: Int(modelWidth),
+            modelHeight: Int(modelHeight)
+        )
+        
+        let input = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: resizedBuffer)])
         let output = try mlModel.prediction(from: input)
-        return try decodeRFDetrOutput(output, imageWidth: imageWidth, imageHeight: imageHeight, thresholdManager: thresholdManager)
+        
+        let rawDetections = try decodeRFDetrOutput(
+            output,
+            imageWidth: Double(modelWidth),
+            imageHeight: Double(modelHeight),
+            thresholdManager: thresholdManager
+        )
+        
+        return rawDetections.map { detection in
+            Detection(
+                x: (detection.x - scaleInfo.offsetX) / scaleInfo.scale,
+                y: (detection.y - scaleInfo.offsetY) / scaleInfo.scale,
+                width: detection.width / scaleInfo.scale,
+                height: detection.height / scaleInfo.scale,
+                confidence: detection.confidence,
+                className: detection.className
+            )
+        }
+    }
+    
+    private func calculateRFDetrScale(
+        originalWidth: Double,
+        originalHeight: Double,
+        modelWidth: Int,
+        modelHeight: Int
+    ) -> (scale: Double, offsetX: Double, offsetY: Double) {
+        let scaleX = Double(modelWidth) / originalWidth
+        let scaleY = Double(modelHeight) / originalHeight
+        let scale = min(scaleX, scaleY)
+        
+        let scaledWidth = originalWidth * scale
+        let scaledHeight = originalHeight * scale
+        
+        let offsetX = (Double(modelWidth) - scaledWidth) / 2.0
+        let offsetY = (Double(modelHeight) - scaledHeight) / 2.0
+        
+        return (scale, offsetX, offsetY)
+    }
+    
+    private func resizePixelBuffer(
+        _ pixelBuffer: CVPixelBuffer,
+        targetWidth: Int,
+        targetHeight: Int
+    ) throws -> CVPixelBuffer {
+        let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
+        
+        if sourceWidth == targetWidth && sourceHeight == targetHeight {
+            return pixelBuffer
+        }
+        
+        let attrs = [
+            kCVPixelBufferCGImageCompatibilityKey: kCFBooleanTrue,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: kCFBooleanTrue,
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary
+        ] as CFDictionary
+        
+        var outputPixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            targetWidth,
+            targetHeight,
+            kCVPixelFormatType_32BGRA,
+            attrs,
+            &outputPixelBuffer
+        )
+        
+        guard status == kCVReturnSuccess, let outputBuffer = outputPixelBuffer else {
+            throw ModelError.imageConversionFailed
+        }
+        
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        CVPixelBufferLockBaseAddress(outputBuffer, [])
+        
+        defer {
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+            CVPixelBufferUnlockBaseAddress(outputBuffer, [])
+        }
+        
+        guard let sourceData = CVPixelBufferGetBaseAddress(pixelBuffer),
+              let destData = CVPixelBufferGetBaseAddress(outputBuffer) else {
+            throw ModelError.imageConversionFailed
+        }
+        
+        let sourceBytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let destBytesPerRow = CVPixelBufferGetBytesPerRow(outputBuffer)
+        
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        
+        guard let sourceContext = CGContext(
+            data: sourceData,
+            width: sourceWidth,
+            height: sourceHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: sourceBytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        ),
+        let sourceCGImage = sourceContext.makeImage() else {
+            throw ModelError.imageConversionFailed
+        }
+        
+        guard let destContext = CGContext(
+            data: destData,
+            width: targetWidth,
+            height: targetHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: destBytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        ) else {
+            throw ModelError.imageConversionFailed
+        }
+        
+        let scaleX = CGFloat(targetWidth) / CGFloat(sourceWidth)
+        let scaleY = CGFloat(targetHeight) / CGFloat(sourceHeight)
+        let scale = min(scaleX, scaleY)
+        
+        let scaledWidth = CGFloat(sourceWidth) * scale
+        let scaledHeight = CGFloat(sourceHeight) * scale
+        let offsetX = (CGFloat(targetWidth) - scaledWidth) / 2.0
+        let offsetY = (CGFloat(targetHeight) - scaledHeight) / 2.0
+        
+        destContext.setFillColor(UIColor.black.cgColor)
+        destContext.fill(CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight))
+        
+        destContext.draw(
+            sourceCGImage,
+            in: CGRect(x: offsetX, y: offsetY, width: scaledWidth, height: scaledHeight)
+        )
+        
+        return outputBuffer
     }
     
     private func decodeRFDetrOutput(
