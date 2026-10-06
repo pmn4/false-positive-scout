@@ -13,7 +13,7 @@ struct ModelVersion: Codable, Identifiable {
     let created: String?
     let modelType: String?
     let map: Double?
-    let trained: Bool
+    let hasExports: Bool
     
     var displayName: String {
         if let type = modelType {
@@ -37,9 +37,6 @@ struct ModelVersion: Codable, Identifiable {
     }
     
     var availabilityStatus: String? {
-        if !trained {
-            return "Not trained"
-        }
         return nil
     }
     
@@ -125,11 +122,17 @@ class ModelManager: ObservableObject {
                     let name = versionDict["name"] as? String ?? "Version \(versionNumber)"
                     let created = (versionDict["created"] as? String) ?? (versionDict["created"] as? NSNumber).map { "\($0)" }
                     
-                    let hasTrained = versionDict["model"] != nil
+                    let hasExports = (versionDict["exports"] != nil) || 
+                                    (versionDict["model"] != nil) ||
+                                    (versionDict["models"] != nil)
                     
                     let modelType: String?
                     if let modelDict = versionDict["model"] as? [String: Any],
                        let type = modelDict["type"] as? String {
+                        modelType = type
+                    } else if let modelsArray = versionDict["models"] as? [[String: Any]],
+                              let firstModel = modelsArray.first,
+                              let type = firstModel["type"] as? String {
                         modelType = type
                     } else {
                         modelType = nil
@@ -151,7 +154,7 @@ class ModelManager: ObservableObject {
                         created: created,
                         modelType: modelType,
                         map: map,
-                        trained: hasTrained
+                        hasExports: hasExports
                     )
                 }
                 .sorted { a, b in
@@ -230,9 +233,14 @@ class ModelManager: ObservableObject {
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw ModelError.exportFailed
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            let errorBody = String(data: data, encoding: .utf8) ?? ""
+            let truncatedBody = errorBody.prefix(200)
+            throw ModelError.exportFailedWithReason("HTTP \(httpResponse.statusCode): \(truncatedBody)")
         }
         
         await MainActor.run {
@@ -240,12 +248,21 @@ class ModelManager: ObservableObject {
             downloadProgress = 0.3
         }
         
-        // Parse response to get coreml.model URL
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let coremlDict = json["coreml"] as? [String: Any],
-              let modelURLString = coremlDict["model"] as? String,
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ModelError.exportFailedWithReason("Invalid JSON response from /coreml endpoint")
+        }
+        
+        guard let coremlDict = json["coreml"] as? [String: Any] else {
+            let availableKeys = json.keys.joined(separator: ", ")
+            let message = json["message"] as? String ?? json["error"] as? String
+            let details = message.map { ": \($0)" } ?? ""
+            throw ModelError.exportFailedWithReason("No 'coreml' key in response. Available keys: \(availableKeys)\(details)")
+        }
+        
+        guard let modelURLString = coremlDict["model"] as? String,
               let modelURL = URL(string: modelURLString) else {
-            throw ModelError.noDownloadLink
+            let coremlKeys = coremlDict.keys.joined(separator: ", ")
+            throw ModelError.exportFailedWithReason("No model URL in coreml dict. Available keys: \(coremlKeys)")
         }
         
         // Download the .mlmodel file (or .zip containing it)
@@ -567,6 +584,7 @@ enum ModelError: LocalizedError {
     case listFailed
     case listFailedWithReason(String)
     case exportFailed
+    case exportFailedWithReason(String)
     case noDownloadLink
     case downloadFailed(String)
     case mlpackageNotFound
@@ -584,6 +602,8 @@ enum ModelError: LocalizedError {
             return "Failed to list model versions: \(reason)"
         case .exportFailed:
             return "Failed to export Core ML model"
+        case .exportFailedWithReason(let reason):
+            return "Failed to export Core ML model: \(reason)"
         case .noDownloadLink:
             return "No download link in export response"
         case .downloadFailed(let message):
