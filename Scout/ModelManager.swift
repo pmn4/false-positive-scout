@@ -72,7 +72,36 @@ class ModelManager: ObservableObject {
         case rfDetrTensors
     }
     
+    private enum PreprocessingMode {
+        case stretch
+        case letterbox
+        case centerCrop
+    }
+    
     private var inferenceBackend: InferenceBackend = .visionObjects
+    private var preprocessingMode: PreprocessingMode = .stretch
+    
+    private struct ModelPreprocessingInfo: Codable {
+        let resizeMode: String?
+        let width: Int?
+        let height: Int?
+        
+        var mode: PreprocessingMode {
+            guard let resize = resizeMode?.lowercased() else {
+                return .stretch
+            }
+            
+            if resize.contains("stretch") || resize.contains("fill") {
+                return .stretch
+            } else if resize.contains("fit") || resize.contains("letterbox") {
+                return .letterbox
+            } else if resize.contains("crop") {
+                return .centerCrop
+            }
+            
+            return .stretch
+        }
+    }
     
     private let fileManager = FileManager.default
     
@@ -289,6 +318,9 @@ class ModelManager: ObservableObject {
             }
         }
         
+        var preprocessInfo = extractPreprocessingInfo(from: json)
+        let classNames = extractClassNamesFromAPI(json: json)
+        
         guard let modelURLString = coremlDict["model"] as? String,
               let modelURL = URL(string: modelURLString) else {
             let coremlKeys = coremlDict.keys.joined(separator: ", ")
@@ -413,13 +445,95 @@ class ModelManager: ObservableObject {
         }
         try fileManager.moveItem(at: compiledURL, to: cacheURL)
         
-        // Load the compiled model
+        if let preprocessData = try? JSONEncoder().encode(preprocessInfo) {
+            UserDefaults.standard.set(preprocessData, forKey: "scout_model_preprocessing_\(workspace)_\(projectSlug)_\(versionNum)")
+        }
+        
+        if !classNames.isEmpty {
+            if let classData = try? JSONEncoder().encode(classNames) {
+                UserDefaults.standard.set(classData, forKey: "scout_model_classes_\(workspace)_\(projectSlug)_\(versionNum)")
+            }
+        }
+        
         try await loadCachedModel(from: cacheURL, workspace: workspace, project: projectSlug, version: versionNum)
         
         await MainActor.run {
             downloadStage = "Ready"
             downloadProgress = 1.0
         }
+    }
+    
+    private func extractClassNamesFromAPI(json: [String: Any]) -> [String] {
+        var classNames: [String] = []
+        
+        if let project = json["project"] as? [String: Any],
+           let classes = project["classes"] as? [String: Any] {
+            let sortedClasses = classes.keys.compactMap { key -> (Int, String)? in
+                guard let index = Int(key), let name = classes[key] as? String else { return nil }
+                return (index, name)
+            }.sorted { $0.0 < $1.0 }
+            classNames = sortedClasses.map { $0.1 }
+        }
+        
+        if classNames.isEmpty, let version = json["version"] as? [String: Any],
+           let classes = version["classes"] as? [String: Any] {
+            let sortedClasses = classes.keys.compactMap { key -> (Int, String)? in
+                guard let index = Int(key), let name = classes[key] as? String else { return nil }
+                return (index, name)
+            }.sorted { $0.0 < $1.0 }
+            classNames = sortedClasses.map { $0.1 }
+        }
+        
+        if classNames.isEmpty, let classArray = json["classes"] as? [String] {
+            classNames = classArray
+        }
+        
+        if classNames.isEmpty, let version = json["version"] as? [String: Any],
+           let classArray = version["classes"] as? [String] {
+            classNames = classArray
+        }
+        
+        return classNames
+    }
+    
+    private func extractPreprocessingInfo(from apiResponse: [String: Any]) -> ModelPreprocessingInfo {
+        var resizeMode: String?
+        var width: Int?
+        var height: Int?
+        
+        if let preprocessing = apiResponse["preprocessing"] as? [String: Any] {
+            if let resize = preprocessing["resize"] as? [String: Any] {
+                resizeMode = resize["format"] as? String
+                width = resize["width"] as? Int
+                height = resize["height"] as? Int
+            }
+        }
+        
+        if let version = apiResponse["version"] as? [String: Any] {
+            if let preprocessing = version["preprocessing"] as? [String: Any] {
+                if let resize = preprocessing["resize"] as? [String: Any] {
+                    resizeMode = resize["format"] as? String
+                    width = resize["width"] as? Int
+                    height = resize["height"] as? Int
+                }
+            }
+        }
+        
+        if let coreml = apiResponse["coreml"] as? [String: Any] {
+            if let preprocessing = coreml["preprocessing"] as? [String: Any] {
+                if let resize = preprocessing["resize"] as? [String: Any] {
+                    resizeMode = resize["format"] as? String
+                    width = resize["width"] as? Int
+                    height = resize["height"] as? Int
+                }
+            }
+        }
+        
+        return ModelPreprocessingInfo(
+            resizeMode: resizeMode,
+            width: width,
+            height: height
+        )
     }
     
     private func extractModelFromZip(_ zipURL: URL) async throws -> URL {
@@ -601,7 +715,27 @@ class ModelManager: ObservableObject {
     
     private func finishLoadingModel(_ mlModel: MLModel, backend: InferenceBackend, workspace: String, project: String, version: String) async throws {
         let vnModel = try VNCoreMLModel(for: mlModel)
-        let extractedLabels = extractClassLabels(from: mlModel)
+        var extractedLabels = extractClassLabels(from: mlModel)
+        
+        let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
+        let versionNum = version.split(separator: "/").last.map(String.init) ?? version
+        
+        if extractedLabels.isEmpty,
+           let classData = UserDefaults.standard.data(forKey: "scout_model_classes_\(workspace)_\(projectSlug)_\(versionNum)"),
+           let classNames = try? JSONDecoder().decode([String].self, from: classData) {
+            extractedLabels = classNames
+        }
+        
+        var preprocessMode: PreprocessingMode = .stretch
+        if let preprocessData = UserDefaults.standard.data(forKey: "scout_model_preprocessing_\(workspace)_\(projectSlug)_\(versionNum)"),
+           let preprocessInfo = try? JSONDecoder().decode(ModelPreprocessingInfo.self, from: preprocessData) {
+            preprocessMode = preprocessInfo.mode
+        } else if let metadata = extractPreprocessingFromModelMetadata(mlModel) {
+            preprocessMode = metadata.mode
+        } else if backend == .rfDetrTensors {
+            preprocessMode = .stretch
+            print("⚠️ No preprocessing metadata found, defaulting to Stretch for RF-DETR")
+        }
         
         await MainActor.run {
             let currentWorkspace = UserDefaults.standard.string(forKey: "scout_model_workspace") ?? ""
@@ -623,10 +757,25 @@ class ModelManager: ObservableObject {
             self.currentVNCoreMLModel = vnModel
             self.classLabels = extractedLabels
             self.inferenceBackend = backend
+            self.preprocessingMode = preprocessMode
             self.loadedWorkspace = workspace
             self.loadedProject = project
             self.loadedVersion = version
         }
+    }
+    
+    private func extractPreprocessingFromModelMetadata(_ model: MLModel) -> ModelPreprocessingInfo? {
+        let metadata = model.modelDescription.metadata
+        
+        for (key, value) in metadata {
+            if let stringValue = value as? String {
+                if key.description.lowercased().contains("preprocess") || key.description.lowercased().contains("resize") {
+                    return ModelPreprocessingInfo(resizeMode: stringValue, width: nil, height: nil)
+                }
+            }
+        }
+        
+        return nil
     }
     
     private func extractClassLabels(from model: MLModel) -> [String] {
@@ -848,10 +997,13 @@ class ModelManager: ObservableObject {
         let modelWidth = imageConstraint.pixelsWide
         let modelHeight = imageConstraint.pixelsHigh
         
-        let resizedBuffer = try resizePixelBufferStretch(
+        let (resizedBuffer, scaleInfo) = try resizePixelBufferForModel(
             pixelBuffer,
             targetWidth: modelWidth,
-            targetHeight: modelHeight
+            targetHeight: modelHeight,
+            mode: preprocessingMode,
+            originalWidth: imageWidth,
+            originalHeight: imageHeight
         )
         
         let input = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: resizedBuffer)])
@@ -864,11 +1016,17 @@ class ModelManager: ObservableObject {
             thresholdManager: thresholdManager
         )
         
-        let scaleX = imageWidth / Double(modelWidth)
-        let scaleY = imageHeight / Double(modelHeight)
-        
         let remapped = rawDetections.map { detection in
-            Detection(
+            remapDetection(detection, scaleInfo: scaleInfo)
+        }
+        
+        return remapped
+    }
+    
+    private func remapDetection(_ detection: Detection, scaleInfo: ScaleInfo) -> Detection {
+        switch scaleInfo {
+        case .stretch(let scaleX, let scaleY):
+            return Detection(
                 x: detection.x * scaleX,
                 y: detection.y * scaleY,
                 width: detection.width * scaleX,
@@ -876,9 +1034,54 @@ class ModelManager: ObservableObject {
                 confidence: detection.confidence,
                 className: detection.className
             )
+        case .letterbox(let scale, let offsetX, let offsetY):
+            return Detection(
+                x: (detection.x - offsetX) / scale,
+                y: (detection.y - offsetY) / scale,
+                width: detection.width / scale,
+                height: detection.height / scale,
+                confidence: detection.confidence,
+                className: detection.className
+            )
         }
-        
-        return remapped
+    }
+    
+    private enum ScaleInfo {
+        case stretch(scaleX: Double, scaleY: Double)
+        case letterbox(scale: Double, offsetX: Double, offsetY: Double)
+    }
+    
+    private func resizePixelBufferForModel(
+        _ pixelBuffer: CVPixelBuffer,
+        targetWidth: Int,
+        targetHeight: Int,
+        mode: PreprocessingMode,
+        originalWidth: Double,
+        originalHeight: Double
+    ) throws -> (CVPixelBuffer, ScaleInfo) {
+        switch mode {
+        case .stretch:
+            let buffer = try resizePixelBufferStretch(pixelBuffer, targetWidth: targetWidth, targetHeight: targetHeight)
+            let scaleX = originalWidth / Double(targetWidth)
+            let scaleY = originalHeight / Double(targetHeight)
+            return (buffer, .stretch(scaleX: scaleX, scaleY: scaleY))
+            
+        case .letterbox:
+            let (buffer, scale, offsetX, offsetY) = try resizePixelBufferLetterbox(
+                pixelBuffer,
+                targetWidth: targetWidth,
+                targetHeight: targetHeight,
+                originalWidth: originalWidth,
+                originalHeight: originalHeight
+            )
+            return (buffer, .letterbox(scale: scale, offsetX: offsetX, offsetY: offsetY))
+            
+        case .centerCrop:
+            let buffer = try resizePixelBufferStretch(pixelBuffer, targetWidth: targetWidth, targetHeight: targetHeight)
+            let scaleX = originalWidth / Double(targetWidth)
+            let scaleY = originalHeight / Double(targetHeight)
+            return (buffer, .stretch(scaleX: scaleX, scaleY: scaleY))
+        }
     }
     
     private func resizePixelBufferStretch(
@@ -962,6 +1165,101 @@ class ModelManager: ObservableObject {
         )
         
         return outputBuffer
+    }
+    
+    private func resizePixelBufferLetterbox(
+        _ pixelBuffer: CVPixelBuffer,
+        targetWidth: Int,
+        targetHeight: Int,
+        originalWidth: Double,
+        originalHeight: Double
+    ) throws -> (CVPixelBuffer, Double, Double, Double) {
+        let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
+        
+        let attrs = [
+            kCVPixelBufferCGImageCompatibilityKey: kCFBooleanTrue,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: kCFBooleanTrue,
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary
+        ] as CFDictionary
+        
+        var outputPixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            targetWidth,
+            targetHeight,
+            kCVPixelFormatType_32BGRA,
+            attrs,
+            &outputPixelBuffer
+        )
+        
+        guard status == kCVReturnSuccess, let outputBuffer = outputPixelBuffer else {
+            throw ModelError.imageConversionFailed
+        }
+        
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        CVPixelBufferLockBaseAddress(outputBuffer, [])
+        
+        defer {
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+            CVPixelBufferUnlockBaseAddress(outputBuffer, [])
+        }
+        
+        guard let sourceData = CVPixelBufferGetBaseAddress(pixelBuffer),
+              let destData = CVPixelBufferGetBaseAddress(outputBuffer) else {
+            throw ModelError.imageConversionFailed
+        }
+        
+        let sourceBytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let destBytesPerRow = CVPixelBufferGetBytesPerRow(outputBuffer)
+        
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        
+        guard let sourceContext = CGContext(
+            data: sourceData,
+            width: sourceWidth,
+            height: sourceHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: sourceBytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        ),
+        let sourceCGImage = sourceContext.makeImage() else {
+            throw ModelError.imageConversionFailed
+        }
+        
+        guard let destContext = CGContext(
+            data: destData,
+            width: targetWidth,
+            height: targetHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: destBytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        ) else {
+            throw ModelError.imageConversionFailed
+        }
+        
+        let scaleX = CGFloat(targetWidth) / CGFloat(sourceWidth)
+        let scaleY = CGFloat(targetHeight) / CGFloat(sourceHeight)
+        let scale = min(scaleX, scaleY)
+        
+        let scaledWidth = CGFloat(sourceWidth) * scale
+        let scaledHeight = CGFloat(sourceHeight) * scale
+        let offsetX = (CGFloat(targetWidth) - scaledWidth) / 2.0
+        let offsetY = (CGFloat(targetHeight) - scaledHeight) / 2.0
+        
+        destContext.setFillColor(UIColor.black.cgColor)
+        destContext.fill(CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight))
+        
+        destContext.draw(
+            sourceCGImage,
+            in: CGRect(x: offsetX, y: offsetY, width: scaledWidth, height: scaledHeight)
+        )
+        
+        let remapScale = originalWidth / Double(targetWidth) * Double(scale)
+        
+        return (outputBuffer, remapScale, Double(offsetX), Double(offsetY))
     }
     
     private func decodeRFDetrOutput(
