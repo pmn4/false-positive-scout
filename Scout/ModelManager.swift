@@ -25,6 +25,7 @@ class ModelManager: ObservableObject {
     @Published var currentVNCoreMLModel: VNCoreMLModel?
     @Published var isDownloading = false
     @Published var downloadProgress: Double = 0.0
+    @Published var downloadStage: String = ""
     
     // Track which model is currently loaded (for UI state validation)
     @Published var loadedWorkspace: String?
@@ -108,11 +109,13 @@ class ModelManager: ObservableObject {
         await MainActor.run {
             isDownloading = true
             downloadProgress = 0.0
+            downloadStage = "Starting..."
         }
         
         defer {
             Task { @MainActor in
                 isDownloading = false
+                downloadStage = ""
             }
         }
         
@@ -123,6 +126,9 @@ class ModelManager: ObservableObject {
         // Check if model is already cached (compiled .mlmodelc)
         let cacheURL = getCacheURL(workspace: workspace, project: projectSlug, version: versionNum)
         if fileManager.fileExists(atPath: cacheURL.path) {
+            await MainActor.run {
+                downloadStage = "Loading cached model..."
+            }
             do {
                 try await loadCachedModel(from: cacheURL, workspace: workspace, project: projectSlug, version: versionNum)
                 return
@@ -130,6 +136,11 @@ class ModelManager: ObservableObject {
                 // Bad cache - delete and retry download
                 try? fileManager.removeItem(at: cacheURL)
             }
+        }
+        
+        await MainActor.run {
+            downloadStage = "Fetching model info..."
+            downloadProgress = 0.1
         }
         
         // Download Core ML model from Roboflow (roboflow-swift pattern)
@@ -155,6 +166,11 @@ class ModelManager: ObservableObject {
             throw ModelError.exportFailed
         }
         
+        await MainActor.run {
+            downloadStage = "Downloading model..."
+            downloadProgress = 0.3
+        }
+        
         // Parse response to get coreml.model URL
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let coremlDict = json["coreml"] as? [String: Any],
@@ -165,6 +181,11 @@ class ModelManager: ObservableObject {
         
         // Download the .mlmodel file (or .zip containing it)
         let (tempURL, downloadResponse) = try await URLSession.shared.download(from: modelURL)
+        
+        await MainActor.run {
+            downloadStage = "Download complete"
+            downloadProgress = 0.7
+        }
         
         // Check HTTP status before treating response as a model
         guard let httpResponse = downloadResponse as? HTTPURLResponse else {
@@ -210,6 +231,11 @@ class ModelManager: ObservableObject {
         // Clean up temp file even if compile throws
         defer { try? fileManager.removeItem(at: tempWithExtension) }
         
+        await MainActor.run {
+            downloadStage = "Preparing model for this device..."
+            downloadProgress = 0.8
+        }
+        
         // Compile the model (creates .mlmodelc)
         let cacheDir = getCacheDirectory()
         if !fileManager.fileExists(atPath: cacheDir.path) {
@@ -217,6 +243,11 @@ class ModelManager: ObservableObject {
         }
         
         let compiledURL = try await MLModel.compileModel(at: tempWithExtension)
+        
+        await MainActor.run {
+            downloadStage = "Finalizing..."
+            downloadProgress = 0.9
+        }
         
         // Move compiled model to cache
         if fileManager.fileExists(atPath: cacheURL.path) {
@@ -228,6 +259,7 @@ class ModelManager: ObservableObject {
         try await loadCachedModel(from: cacheURL, workspace: workspace, project: projectSlug, version: versionNum)
         
         await MainActor.run {
+            downloadStage = "Ready"
             downloadProgress = 1.0
         }
     }
@@ -336,6 +368,13 @@ class ModelManager: ObservableObject {
     }
     
     // MARK: - Cache Management
+    
+    func isModelCached(workspace: String, project: String, version: String) -> Bool {
+        let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
+        let versionNum = version.split(separator: "/").last.map(String.init) ?? version
+        let cacheURL = getCacheURL(workspace: workspace, project: projectSlug, version: versionNum)
+        return fileManager.fileExists(atPath: cacheURL.path)
+    }
     
     private func getCacheDirectory() -> URL {
         let cacheDir = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]

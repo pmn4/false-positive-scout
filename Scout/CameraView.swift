@@ -18,6 +18,7 @@ struct CameraView: View {
     @State private var lastSavedHash: Data?
     @State private var captureCount = 0
     @State private var showThresholdSheet = false
+    @State private var showModelPicker = false
     
     private let frameCheckInterval: TimeInterval = 0.5
     private let similarityThreshold: Double = 0.85
@@ -32,10 +33,17 @@ struct CameraView: View {
                     HStack {
                         Spacer()
                         
-                        ThresholdBadge(
-                            thresholdManager: thresholdManager,
-                            showSheet: $showThresholdSheet
-                        )
+                        VStack(spacing: 8) {
+                            ModelBadge(
+                                modelManager: modelManager,
+                                showSheet: $showModelPicker
+                            )
+                            
+                            ThresholdBadge(
+                                thresholdManager: thresholdManager,
+                                showSheet: $showThresholdSheet
+                            )
+                        }
                         .padding(.top, 60)
                         .padding(.trailing, 16)
                     }
@@ -163,6 +171,13 @@ struct CameraView: View {
                     thresholdManager: thresholdManager,
                     modelManager: modelManager,
                     isPresented: $showThresholdSheet
+                )
+            }
+            .sheet(isPresented: $showModelPicker) {
+                ModelPickerSheet(
+                    modelManager: modelManager,
+                    oauthManager: OAuthManager.shared,
+                    isPresented: $showModelPicker
                 )
             }
         }
@@ -489,6 +504,44 @@ struct CameraPreview: UIViewRepresentable {
     
     class Coordinator {
         var previewLayer: AVCaptureVideoPreviewLayer?
+    }
+}
+
+struct ModelBadge: View {
+    @ObservedObject var modelManager: ModelManager
+    @Binding var showSheet: Bool
+    
+    private var displayText: String {
+        if modelManager.isDownloading {
+            return "⏳"
+        } else if let version = modelManager.loadedVersion {
+            return "v\(version)"
+        } else {
+            return "No Model"
+        }
+    }
+    
+    var body: some View {
+        Button(action: {
+            showSheet = true
+        }) {
+            HStack(spacing: 6) {
+                Image(systemName: "cube.box")
+                    .font(.caption)
+                Text(displayText)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial)
+            .cornerRadius(16)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(modelManager.currentModel != nil ? Color.green.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
+            )
+        }
+        .foregroundColor(.primary)
     }
 }
 
