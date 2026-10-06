@@ -617,9 +617,19 @@ struct DetectionOverlay: View {
     let imageSize: CGSize
     let classColors: [String: String]
     
+    @State private var lastLogTime: Date = Date.distantPast
+    
     var body: some View {
         GeometryReader { geometry in
             let viewSize = geometry.size
+            
+            let now = Date()
+            if now.timeIntervalSince(lastLogTime) > 1.0 {
+                DispatchQueue.main.async {
+                    lastLogTime = now
+                    print("🔵 [ScoutDetect] Overlay: imageSize=\(Int(imageSize.width))×\(Int(imageSize.height)), viewSize=\(Int(viewSize.width))×\(Int(viewSize.height)), dets=\(detections.count)")
+                }
+            }
             
             ForEach(detections) { detection in
                 let box = convertToViewCoordinates(

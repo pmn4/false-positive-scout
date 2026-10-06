@@ -501,12 +501,16 @@ class ModelManager: ObservableObject {
         let (data, response) = try await URLSession.shared.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            print("🟡 [ScoutDetect] fetchProjectMetadata failed: HTTP \(httpResponse.statusCode)")
             return ([], [:])
         }
         
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            print("🟡 [ScoutDetect] fetchProjectMetadata: Invalid JSON")
             return ([], [:])
         }
+        
+        print("🔵 [ScoutDetect] fetchProjectMetadata: \(workspace)/\(project)/\(version)")
         
         if let project = json["project"] as? [String: Any] {
             if let colors = project["colors"] as? [String: String] {
@@ -528,8 +532,11 @@ class ModelManager: ObservableObject {
                 if let classMap = versionData["class_map"] as? [String: Int] {
                     let sortedClasses = classMap.sorted { $0.value < $1.value }
                     classNames = sortedClasses.map { $0.key }
+                    print("🔵 [ScoutDetect] class_map found: \(classMap)")
+                    print("🔵 [ScoutDetect] Sorted classes by index: \(sortedClasses)")
                 } else if let classes = versionData["classes"] as? [String] {
                     classNames = classes
+                    print("🔵 [ScoutDetect] classes array: \(classes)")
                 }
             }
         }
@@ -768,7 +775,13 @@ class ModelManager: ObservableObject {
         var extractedLabels = extractClassLabels(from: mlModel)
         
         let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
-        let versionNum = version.split(separator: "/").last.map(String.init) ?? version
+        let versionNum = version.split(separator: "/").last.map(String.init) ?? versionNum
+        
+        let inputDesc = mlModel.modelDescription.inputDescriptionsByName.values.first
+        let imageConstraint = inputDesc?.imageConstraint
+        print("🔵 [ScoutDetect] Model loaded: \(workspace)/\(projectSlug)/\(versionNum)")
+        print("🔵 [ScoutDetect] ImageConstraint: \(imageConstraint?.pixelsWide ?? 0)×\(imageConstraint?.pixelsHigh ?? 0)")
+        print("🔵 [ScoutDetect] Backend: \(backend == .rfDetrTensors ? "RF-DETR" : "Vision/YOLO")")
         
         if extractedLabels.isEmpty,
            let classData = UserDefaults.standard.data(forKey: "scout_model_classes_\(workspace)_\(projectSlug)_\(versionNum)"),
@@ -842,6 +855,10 @@ class ModelManager: ObservableObject {
             self.loadedWorkspace = workspace
             self.loadedProject = project
             self.loadedVersion = version
+            
+            print("🔵 [ScoutDetect] ResizeMode: \(preprocessMode == .stretch ? "Stretch" : preprocessMode == .letterbox ? "Letterbox" : "CenterCrop")")
+            print("🔵 [ScoutDetect] Classes: \(extractedLabels.count) → [\(extractedLabels.prefix(5).joined(separator: ", "))\(extractedLabels.count > 5 ? "..." : "")]")
+            print("🔵 [ScoutDetect] Colors: \(colors.count) classes with colors")
         }
     }
     
@@ -1041,14 +1058,25 @@ class ModelManager: ObservableObject {
         let bufferWidth = Double(CVPixelBufferGetWidth(pixelBuffer))
         let bufferHeight = Double(CVPixelBufferGetHeight(pixelBuffer))
         
+        print("🔵 [ScoutDetect] Frame buffer: \(Int(bufferWidth))×\(Int(bufferHeight))")
+        
         if inferenceBackend == .rfDetrTensors {
-            return try await detectRFDetrDirect(
+            let result = try await detectRFDetrDirect(
                 mlModel: mlModel,
                 pixelBuffer: pixelBuffer,
                 imageWidth: bufferWidth,
                 imageHeight: bufferHeight,
                 thresholdManager: thresholdManager
             )
+            
+            if !result.isEmpty {
+                print("🔵 [ScoutDetect] After remap: \(result.count) detections")
+                if let first = result.first {
+                    print("🔵 [ScoutDetect] First remapped: \(first.className) box=(\(Int(first.x)),\(Int(first.y)),\(Int(first.width))×\(Int(first.height)))")
+                }
+            }
+            
+            return result
         }
         
         guard let vnModel = currentVNCoreMLModel else {
@@ -1095,6 +1123,8 @@ class ModelManager: ObservableObject {
         let modelWidth = imageConstraint.pixelsWide
         let modelHeight = imageConstraint.pixelsHigh
         
+        print("🔵 [ScoutDetect] Resizing \(Int(imageWidth))×\(Int(imageHeight)) → \(modelWidth)×\(modelHeight) mode=\(preprocessingMode == .stretch ? "Stretch" : "Letterbox")")
+        
         let (resizedBuffer, scaleInfo) = try resizePixelBufferForModel(
             pixelBuffer,
             targetWidth: modelWidth,
@@ -1103,6 +1133,13 @@ class ModelManager: ObservableObject {
             originalWidth: imageWidth,
             originalHeight: imageHeight
         )
+        
+        switch scaleInfo {
+        case .stretch(let scaleX, let scaleY):
+            print("🔵 [ScoutDetect] Stretch remap: scaleX=\(String(format: "%.3f", scaleX)), scaleY=\(String(format: "%.3f", scaleY))")
+        case .letterbox(let scale, let offsetX, let offsetY):
+            print("🔵 [ScoutDetect] Letterbox remap: scale=\(String(format: "%.3f", scale)), offset=(\(Int(offsetX)),\(Int(offsetY)))")
+        }
         
         let input = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: resizedBuffer)])
         let output = try mlModel.prediction(from: input)
@@ -1382,8 +1419,12 @@ class ModelManager: ObservableObject {
             throw ModelError.unsupportedModelTypeWithReason("Unexpected boxes shape: \(boxesFeature.shape)")
         }
         
+        print("🔵 [ScoutDetect] decodeRFDetrOutput: \(numDetections) raw detections from model")
+        
         var detections: [Detection] = []
         detections.reserveCapacity(min(numDetections, 64))
+        
+        var topDetections: [(idx: Int, score: Float, cx: Float, cy: Float)] = []
         
         for i in 0..<numDetections {
             let score: Float
@@ -1415,11 +1456,21 @@ class ModelManager: ObservableObject {
                 h = abs(boxesFeature[[NSNumber(value: i), 3] as [NSNumber]].floatValue)
             }
             
+            if topDetections.count < 3 {
+                topDetections.append((labelIdx, score, cx, cy))
+            }
+            
             let className: String
+            let mappingNote: String
             if labelIdx >= 0 && labelIdx < classLabels.count {
                 className = classLabels[labelIdx]
+                mappingNote = "direct"
+            } else if labelIdx > 0 && (labelIdx - 1) < classLabels.count {
+                className = classLabels[labelIdx - 1]
+                mappingNote = "offset-1"
             } else {
                 className = "unknown"
+                mappingNote = labelIdx >= classLabels.count ? "OOB(\(labelIdx) >= \(classLabels.count))" : "negative"
             }
             
             let effectiveThreshold = Float(thresholdManager.effectiveThreshold(for: className))
@@ -1431,6 +1482,10 @@ class ModelManager: ObservableObject {
             let width = Double(w) * imageWidth
             let height = Double(h) * imageHeight
             
+            if detections.count < 3 {
+                print("🔵 [ScoutDetect] Det \(detections.count): labelIdx=\(labelIdx) → \"\(className)\" [\(mappingNote)] score=\(Int(score*100))% box=(\(Int(centerX)),\(Int(centerY)),\(Int(width))×\(Int(height)))")
+            }
+            
             detections.append(Detection(
                 x: centerX,
                 y: centerY,
@@ -1440,6 +1495,11 @@ class ModelManager: ObservableObject {
                 className: className
             ))
         }
+        
+        if !topDetections.isEmpty {
+            print("🔵 [ScoutDetect] Top raw: \(topDetections.map { "idx\($0.idx):\(Int($0.score*100))%" }.joined(separator: ", "))")
+        }
+        print("🔵 [ScoutDetect] After threshold: \(detections.count) detections")
         
         return detections
     }
