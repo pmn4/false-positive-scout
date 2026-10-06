@@ -308,43 +308,55 @@ class ModelManager: ObservableObject {
         let pathExtension = tempURL.pathExtension.lowercased()
         let isZip = pathExtension == "zip"
         
-        // Check for zip magic bytes if extension is ambiguous (read only first 2 bytes)
+        // Check for zip magic bytes if extension is ambiguous
         var isZipByContent = false
         if !isZip, let fileHandle = try? FileHandle(forReadingFrom: tempURL) {
             defer { try? fileHandle.close() }
             if let header = try? fileHandle.read(upToCount: 2), header.count == 2 {
-                isZipByContent = (header == Data([0x50, 0x4B]))  // "PK" magic bytes
+                isZipByContent = (header == Data([0x50, 0x4B]))
             }
         }
         
+        let localModelURL: URL
         if isZip || isZipByContent {
-            // Core ML models packaged as .zip require unzipping
-            // iOS doesn't have built-in sync unzip, and async Process isn't available
-            try? fileManager.removeItem(at: tempURL)
-            throw ModelError.zipNotSupported
+            let zipURL = tempURL.deletingLastPathComponent()
+                .appendingPathComponent(tempURL.lastPathComponent)
+                .appendingPathExtension("zip")
+            try fileManager.moveItem(at: tempURL, to: zipURL)
+            
+            await MainActor.run {
+                downloadStage = "Unpacking..."
+                downloadProgress = 0.7
+            }
+            
+            localModelURL = try await extractModelFromZip(zipURL)
+        } else {
+            let tempWithExtension = tempURL.deletingLastPathComponent()
+                .appendingPathComponent(tempURL.lastPathComponent)
+                .appendingPathExtension("mlmodel")
+            try fileManager.moveItem(at: tempURL, to: tempWithExtension)
+            localModelURL = tempWithExtension
         }
         
-        // URLSession temp files are often extensionless; add .mlmodel extension before compile
-        let tempWithExtension = tempURL.deletingLastPathComponent()
-            .appendingPathComponent(tempURL.lastPathComponent)
-            .appendingPathExtension("mlmodel")
-        try fileManager.moveItem(at: tempURL, to: tempWithExtension)
-        
-        // Clean up temp file even if compile throws
-        defer { try? fileManager.removeItem(at: tempWithExtension) }
+        defer { try? fileManager.removeItem(at: localModelURL) }
         
         await MainActor.run {
-            downloadStage = "Preparing model for this device..."
+            downloadStage = "Compiling for this iPhone..."
             downloadProgress = 0.8
         }
         
-        // Compile the model (creates .mlmodelc)
+        // Compile the model (creates .mlmodelc) - skip if already compiled
         let cacheDir = getCacheDirectory()
         if !fileManager.fileExists(atPath: cacheDir.path) {
             try fileManager.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         }
         
-        let compiledURL = try await MLModel.compileModel(at: modelURL)
+        let compiledURL: URL
+        if localModelURL.pathExtension == "mlmodelc" {
+            compiledURL = localModelURL
+        } else {
+            compiledURL = try await MLModel.compileModel(at: localModelURL)
+        }
         
         await MainActor.run {
             downloadStage = "Loading..."
@@ -367,21 +379,21 @@ class ModelManager: ObservableObject {
     }
     
     private func extractModelFromZip(_ zipURL: URL) async throws -> URL {
-        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let extractDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fileManager.createDirectory(at: extractDir, withIntermediateDirectories: true)
         
-        defer {
-            try? fileManager.removeItem(at: tempDir)
-        }
+        try fileManager.unzipItem(at: zipURL, to: extractDir)
+        try? fileManager.removeItem(at: zipURL)
         
-        try fileManager.unzipItem(at: zipURL, to: tempDir)
+        let extractedModel = try findModelInDirectory(extractDir)
         
-        let extractedModel = try findModelInDirectory(tempDir)
-        
-        let finalURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let finalURL = fileManager.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
             .appendingPathComponent(extractedModel.lastPathComponent)
         try fileManager.createDirectory(at: finalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try fileManager.moveItem(at: extractedModel, to: finalURL)
+        
+        try? fileManager.removeItem(at: extractDir)
         
         return finalURL
     }
