@@ -55,7 +55,7 @@ struct CameraView: View {
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 8)
-                                .background(isRecording ? Color.red.opacity(0.9) : .ultraThinMaterial)
+                                .background(isRecording ? AnyShapeStyle(Color.red.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
                                 .cornerRadius(20)
                                 .animation(.easeInOut(duration: 0.3), value: isRecording)
                         }
@@ -298,7 +298,10 @@ struct CameraView: View {
                 let r = pixelData[offset]
                 let g = pixelData[offset + 1]
                 let b = pixelData[offset + 2]
-                let gray = UInt8(Double(r) * 0.299 + Double(g) * 0.587 + Double(b) * 0.114)
+                let rPart: Double = Double(r) * 0.299
+                let gPart: Double = Double(g) * 0.587
+                let bPart: Double = Double(b) * 0.114
+                let gray = UInt8(rPart + gPart + bPart)
                 grayValues.append(gray)
             }
         }

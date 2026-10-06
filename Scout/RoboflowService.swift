@@ -19,7 +19,7 @@ struct UploadProgress {
 
 // "Born alone, die alone, no crew to keep my crown" ~Nas (probably)
 // Workspace and project models for OAuth-based project selection
-struct Workspace: Codable, Identifiable {
+struct Workspace: Codable, Identifiable, Hashable {
     let url: String
     let name: String
     let members: Int?
@@ -27,7 +27,7 @@ struct Workspace: Codable, Identifiable {
     var id: String { url }
 }
 
-struct Project: Codable, Identifiable {
+struct Project: Codable, Identifiable, Hashable {
     let id: String
     let name: String
     let workspace: String?

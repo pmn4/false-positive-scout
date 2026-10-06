@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import CoreML
 import Vision
 import Compression
@@ -196,7 +197,7 @@ class ModelManager: ObservableObject {
             try fileManager.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         }
         
-        let compiledURL = try MLModel.compileModel(at: tempWithExtension)
+        let compiledURL = try await MLModel.compileModel(at: tempWithExtension)
         
         // Move compiled model to cache
         if fileManager.fileExists(atPath: cacheURL.path) {

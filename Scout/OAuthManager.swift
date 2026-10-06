@@ -17,7 +17,7 @@ class OAuthManager: NSObject, ObservableObject {
     private let validateEndpoint = "https://app.roboflow.com/oauth/validate"
     
     // Client ID placeholder - Patrick will paste from Roboflow OAuth app
-    private let clientId = "YOUR_ROBOFLOW_OAUTH_CLIENT_ID"
+    private let clientId = "7b53bbdb-8056-43f1-b2be-77a6ddfbd547"
     
     // Redirect URI (https:// for Universal Links / Associated Domains)
     // Roboflow requires https:// (or http:// for localhost only)

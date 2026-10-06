@@ -38,7 +38,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		A0FFFFFFE /* Frameworks */ = {
+		B00000000000000000000003 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -51,12 +51,12 @@
 		A0FFFFFF8 = {
 			isa = PBXGroup;
 			children = (
-				A0FFFFFF9 /* Scout */,
-				A1000000F /* Products */,
+				B00000000000000000000001 /* Scout */,
+				B00000000000000000000002 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		A0FFFFFF9 /* Scout */ = {
+		B00000000000000000000001 /* Scout */ = {
 			isa = PBXGroup;
 			children = (
 				A10000000 /* ScoutApp.swift */,
@@ -76,7 +76,7 @@
 			path = Scout;
 			sourceTree = "<group>";
 		};
-		A1000000F /* Products */ = {
+		B00000000000000000000002 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				A0FFFFFFF /* Scout.app */,
@@ -92,7 +92,7 @@
 			buildConfigurationList = A10000020 /* Build configuration list for PBXNativeTarget "Scout" */;
 			buildPhases = (
 				A0FFFFFB /* Sources */,
-				A0FFFFFFE /* Frameworks */,
+				B00000000000000000000003 /* Frameworks */,
 				A0FFFFFD /* Resources */,
 			);
 			buildRules = (
@@ -123,7 +123,7 @@
 				Base,
 			);
 			mainGroup = A0FFFFFF8;
-			productRefGroup = A1000000F /* Products */;
+			productRefGroup = B00000000000000000000002 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -202,7 +202,6 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_ASSET_PATHS = "\"Scout/Preview Content\"";
 				DEVELOPMENT_TEAM = T6FND7233Y;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -287,7 +286,6 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_ASSET_PATHS = "\"Scout/Preview Content\"";
 				DEVELOPMENT_TEAM = T6FND7233Y;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_PREVIEWS = YES;
