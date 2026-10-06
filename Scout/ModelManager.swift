@@ -848,17 +848,10 @@ class ModelManager: ObservableObject {
         let modelWidth = imageConstraint.pixelsWide
         let modelHeight = imageConstraint.pixelsHigh
         
-        let resizedBuffer = try resizePixelBuffer(
+        let resizedBuffer = try resizePixelBufferStretch(
             pixelBuffer,
             targetWidth: modelWidth,
             targetHeight: modelHeight
-        )
-        
-        let scaleInfo = calculateRFDetrScale(
-            originalWidth: imageWidth,
-            originalHeight: imageHeight,
-            modelWidth: Int(modelWidth),
-            modelHeight: Int(modelHeight)
         )
         
         let input = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: resizedBuffer)])
@@ -871,38 +864,24 @@ class ModelManager: ObservableObject {
             thresholdManager: thresholdManager
         )
         
-        return rawDetections.map { detection in
+        let scaleX = imageWidth / Double(modelWidth)
+        let scaleY = imageHeight / Double(modelHeight)
+        
+        let remapped = rawDetections.map { detection in
             Detection(
-                x: (detection.x - scaleInfo.offsetX) / scaleInfo.scale,
-                y: (detection.y - scaleInfo.offsetY) / scaleInfo.scale,
-                width: detection.width / scaleInfo.scale,
-                height: detection.height / scaleInfo.scale,
+                x: detection.x * scaleX,
+                y: detection.y * scaleY,
+                width: detection.width * scaleX,
+                height: detection.height * scaleY,
                 confidence: detection.confidence,
                 className: detection.className
             )
         }
+        
+        return remapped
     }
     
-    private func calculateRFDetrScale(
-        originalWidth: Double,
-        originalHeight: Double,
-        modelWidth: Int,
-        modelHeight: Int
-    ) -> (scale: Double, offsetX: Double, offsetY: Double) {
-        let scaleX = Double(modelWidth) / originalWidth
-        let scaleY = Double(modelHeight) / originalHeight
-        let scale = min(scaleX, scaleY)
-        
-        let scaledWidth = originalWidth * scale
-        let scaledHeight = originalHeight * scale
-        
-        let offsetX = (Double(modelWidth) - scaledWidth) / 2.0
-        let offsetY = (Double(modelHeight) - scaledHeight) / 2.0
-        
-        return (scale, offsetX, offsetY)
-    }
-    
-    private func resizePixelBuffer(
+    private func resizePixelBufferStretch(
         _ pixelBuffer: CVPixelBuffer,
         targetWidth: Int,
         targetHeight: Int
@@ -977,21 +956,9 @@ class ModelManager: ObservableObject {
             throw ModelError.imageConversionFailed
         }
         
-        let scaleX = CGFloat(targetWidth) / CGFloat(sourceWidth)
-        let scaleY = CGFloat(targetHeight) / CGFloat(sourceHeight)
-        let scale = min(scaleX, scaleY)
-        
-        let scaledWidth = CGFloat(sourceWidth) * scale
-        let scaledHeight = CGFloat(sourceHeight) * scale
-        let offsetX = (CGFloat(targetWidth) - scaledWidth) / 2.0
-        let offsetY = (CGFloat(targetHeight) - scaledHeight) / 2.0
-        
-        destContext.setFillColor(UIColor.black.cgColor)
-        destContext.fill(CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight))
-        
         destContext.draw(
             sourceCGImage,
-            in: CGRect(x: offsetX, y: offsetY, width: scaledWidth, height: scaledHeight)
+            in: CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight)
         )
         
         return outputBuffer
