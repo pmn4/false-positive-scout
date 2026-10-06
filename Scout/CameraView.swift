@@ -40,7 +40,8 @@ struct CameraView: View {
                 } else {
                     DetectionOverlay(
                         detections: currentDetections,
-                        imageSize: cameraManager.latestFrameSize
+                        imageSize: cameraManager.latestFrameSize,
+                        classColors: modelManager.classColors
                     )
                 }
                 
@@ -614,6 +615,7 @@ struct ThresholdBadge: View {
 struct DetectionOverlay: View {
     let detections: [Detection]
     let imageSize: CGSize
+    let classColors: [String: String]
     
     var body: some View {
         GeometryReader { geometry in
@@ -626,8 +628,10 @@ struct DetectionOverlay: View {
                     viewSize: viewSize
                 )
                 
+                let boxColor = colorForClass(detection.className)
+                
                 Rectangle()
-                    .stroke(Color.green, lineWidth: 2)
+                    .stroke(boxColor, lineWidth: 2)
                     .frame(width: box.width, height: box.height)
                     .position(x: box.x, y: box.y)
                     .overlay(
@@ -637,12 +641,22 @@ struct DetectionOverlay: View {
                             .foregroundColor(.white)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.green.opacity(0.8))
+                            .background(boxColor.opacity(0.8))
                             .cornerRadius(4)
                             .position(x: box.x, y: box.y - box.height / 2 - 12)
                     )
             }
         }
+    }
+    
+    private func colorForClass(_ className: String) -> Color {
+        if let hexColor = classColors[className] {
+            return Color(hex: hexColor) ?? .green
+        }
+        
+        let hash = abs(className.hashValue)
+        let hue = Double(hash % 360) / 360.0
+        return Color(hue: hue, saturation: 0.8, brightness: 0.9)
     }
     
     private func convertToViewCoordinates(
@@ -707,6 +721,25 @@ struct LoadingModelOverlay: View {
             Spacer()
         }
         .padding()
+    }
+}
+
+extension Color {
+    init?(hex: String) {
+        var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        hexSanitized = hexSanitized.replacingOccurrences(of: "#", with: "")
+        
+        var rgb: UInt64 = 0
+        
+        guard Scanner(string: hexSanitized).scanHexInt64(&rgb) else {
+            return nil
+        }
+        
+        let r = Double((rgb & 0xFF0000) >> 16) / 255.0
+        let g = Double((rgb & 0x00FF00) >> 8) / 255.0
+        let b = Double(rgb & 0x0000FF) / 255.0
+        
+        self.init(red: r, green: g, blue: b)
     }
 }
 

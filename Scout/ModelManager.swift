@@ -65,6 +65,7 @@ class ModelManager: ObservableObject {
     @Published var loadedProject: String?
     @Published var loadedVersion: String?
     @Published var classLabels: [String] = []
+    @Published var classColors: [String: String] = [:]
     @Published var modelType: String?
     
     private enum InferenceBackend {
@@ -319,7 +320,7 @@ class ModelManager: ObservableObject {
         }
         
         var preprocessInfo = extractPreprocessingInfo(from: json)
-        let classNames = extractClassNamesFromAPI(json: json)
+        let (classNames, classColors) = extractClassMetadataFromAPI(json: json)
         
         guard let modelURLString = coremlDict["model"] as? String,
               let modelURL = URL(string: modelURLString) else {
@@ -455,6 +456,12 @@ class ModelManager: ObservableObject {
             }
         }
         
+        if !classColors.isEmpty {
+            if let colorData = try? JSONEncoder().encode(classColors) {
+                UserDefaults.standard.set(colorData, forKey: "scout_model_colors_\(workspace)_\(projectSlug)_\(versionNum)")
+            }
+        }
+        
         try await loadCachedModel(from: cacheURL, workspace: workspace, project: projectSlug, version: versionNum)
         
         await MainActor.run {
@@ -463,25 +470,36 @@ class ModelManager: ObservableObject {
         }
     }
     
-    private func extractClassNamesFromAPI(json: [String: Any]) -> [String] {
+    private func extractClassMetadataFromAPI(json: [String: Any]) -> ([String], [String: String]) {
         var classNames: [String] = []
+        var classColors: [String: String] = [:]
         
-        if let project = json["project"] as? [String: Any],
-           let classes = project["classes"] as? [String: Any] {
-            let sortedClasses = classes.keys.compactMap { key -> (Int, String)? in
-                guard let index = Int(key), let name = classes[key] as? String else { return nil }
-                return (index, name)
-            }.sorted { $0.0 < $1.0 }
-            classNames = sortedClasses.map { $0.1 }
+        if let project = json["project"] as? [String: Any] {
+            if let classes = project["classes"] as? [String: Any] {
+                let sortedClasses = classes.keys.compactMap { key -> (Int, String)? in
+                    guard let index = Int(key), let name = classes[key] as? String else { return nil }
+                    return (index, name)
+                }.sorted { $0.0 < $1.0 }
+                classNames = sortedClasses.map { $0.1 }
+            }
+            
+            if let colors = project["colors"] as? [String: String] {
+                classColors = colors
+            }
         }
         
-        if classNames.isEmpty, let version = json["version"] as? [String: Any],
-           let classes = version["classes"] as? [String: Any] {
-            let sortedClasses = classes.keys.compactMap { key -> (Int, String)? in
-                guard let index = Int(key), let name = classes[key] as? String else { return nil }
-                return (index, name)
-            }.sorted { $0.0 < $1.0 }
-            classNames = sortedClasses.map { $0.1 }
+        if classNames.isEmpty, let version = json["version"] as? [String: Any] {
+            if let classes = version["classes"] as? [String: Any] {
+                let sortedClasses = classes.keys.compactMap { key -> (Int, String)? in
+                    guard let index = Int(key), let name = classes[key] as? String else { return nil }
+                    return (index, name)
+                }.sorted { $0.0 < $1.0 }
+                classNames = sortedClasses.map { $0.1 }
+            }
+            
+            if classColors.isEmpty, let colors = version["colors"] as? [String: String] {
+                classColors = colors
+            }
         }
         
         if classNames.isEmpty, let classArray = json["classes"] as? [String] {
@@ -493,7 +511,7 @@ class ModelManager: ObservableObject {
             classNames = classArray
         }
         
-        return classNames
+        return (classNames, classColors)
     }
     
     private func extractPreprocessingInfo(from apiResponse: [String: Any]) -> ModelPreprocessingInfo {
@@ -726,6 +744,12 @@ class ModelManager: ObservableObject {
             extractedLabels = classNames
         }
         
+        var colors: [String: String] = [:]
+        if let colorData = UserDefaults.standard.data(forKey: "scout_model_colors_\(workspace)_\(projectSlug)_\(versionNum)"),
+           let colorMap = try? JSONDecoder().decode([String: String].self, from: colorData) {
+            colors = colorMap
+        }
+        
         var preprocessMode: PreprocessingMode = .stretch
         if let preprocessData = UserDefaults.standard.data(forKey: "scout_model_preprocessing_\(workspace)_\(projectSlug)_\(versionNum)"),
            let preprocessInfo = try? JSONDecoder().decode(ModelPreprocessingInfo.self, from: preprocessData) {
@@ -756,6 +780,7 @@ class ModelManager: ObservableObject {
             self.currentModel = mlModel
             self.currentVNCoreMLModel = vnModel
             self.classLabels = extractedLabels
+            self.classColors = colors
             self.inferenceBackend = backend
             self.preprocessingMode = preprocessMode
             self.loadedWorkspace = workspace
@@ -943,12 +968,15 @@ class ModelManager: ObservableObject {
             throw ModelError.imageConversionFailed
         }
         
+        let bufferWidth = Double(CVPixelBufferGetWidth(pixelBuffer))
+        let bufferHeight = Double(CVPixelBufferGetHeight(pixelBuffer))
+        
         if inferenceBackend == .rfDetrTensors {
             return try await detectRFDetrDirect(
                 mlModel: mlModel,
                 pixelBuffer: pixelBuffer,
-                imageWidth: Double(image.size.width),
-                imageHeight: Double(image.size.height),
+                imageWidth: bufferWidth,
+                imageHeight: bufferHeight,
                 thresholdManager: thresholdManager
             )
         }
