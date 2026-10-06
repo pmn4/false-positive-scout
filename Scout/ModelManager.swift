@@ -794,7 +794,7 @@ class ModelManager: ObservableObject {
         
         for (key, value) in metadata {
             if let stringValue = value as? String {
-                if key.description.lowercased().contains("preprocess") || key.description.lowercased().contains("resize") {
+                if key.rawValue.lowercased().contains("preprocess") || key.rawValue.lowercased().contains("resize") {
                     return ModelPreprocessingInfo(resizeMode: stringValue, width: nil, height: nil)
                 }
             }
