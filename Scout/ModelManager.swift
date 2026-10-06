@@ -318,6 +318,8 @@ class ModelManager: ObservableObject {
         }
         
         let localModelURL: URL
+        var extractDirToCleanup: URL?
+        
         if isZip || isZipByContent {
             let zipURL = tempURL.deletingLastPathComponent()
                 .appendingPathComponent(tempURL.lastPathComponent)
@@ -329,7 +331,13 @@ class ModelManager: ObservableObject {
                 downloadProgress = 0.7
             }
             
-            localModelURL = try await extractModelFromZip(zipURL)
+            let extractedURL = try await extractModelFromZip(zipURL)
+            
+            if extractedURL.lastPathComponent.starts(with: UUID().uuidString.prefix(8)) {
+                extractDirToCleanup = extractedURL
+            }
+            
+            localModelURL = extractedURL
         } else {
             let tempWithExtension = tempURL.deletingLastPathComponent()
                 .appendingPathComponent(tempURL.lastPathComponent)
@@ -338,7 +346,13 @@ class ModelManager: ObservableObject {
             localModelURL = tempWithExtension
         }
         
-        defer { try? fileManager.removeItem(at: localModelURL) }
+        defer {
+            if let cleanupDir = extractDirToCleanup {
+                try? fileManager.removeItem(at: cleanupDir)
+            } else {
+                try? fileManager.removeItem(at: localModelURL)
+            }
+        }
         
         await MainActor.run {
             downloadStage = "Compiling for this iPhone..."
@@ -355,7 +369,23 @@ class ModelManager: ObservableObject {
         if localModelURL.pathExtension == "mlmodelc" {
             compiledURL = localModelURL
         } else {
-            compiledURL = try await MLModel.compileModel(at: localModelURL)
+            var isDirectory: ObjCBool = false
+            fileManager.fileExists(atPath: localModelURL.path, isDirectory: &isDirectory)
+            
+            if isDirectory.boolValue {
+                let modelFiles = try fileManager.contentsOfDirectory(at: localModelURL, includingPropertiesForKeys: nil)
+                    .filter { $0.pathExtension == "mlmodel" }
+                
+                if let modelFile = modelFiles.first {
+                    compiledURL = try await MLModel.compileModel(at: modelFile)
+                } else if localModelURL.pathExtension == "mlpackage" {
+                    compiledURL = try await MLModel.compileModel(at: localModelURL)
+                } else {
+                    throw ModelError.noModelInArchive("No .mlmodel found in directory")
+                }
+            } else {
+                compiledURL = try await MLModel.compileModel(at: localModelURL)
+            }
         }
         
         await MainActor.run {
@@ -382,24 +412,66 @@ class ModelManager: ObservableObject {
         let extractDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try fileManager.createDirectory(at: extractDir, withIntermediateDirectories: true)
         
-        try fileManager.unzipItem(at: zipURL, to: extractDir)
-        try? fileManager.removeItem(at: zipURL)
-        
-        let extractedModel = try findModelInDirectory(extractDir)
-        
-        let finalURL = fileManager.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathComponent(extractedModel.lastPathComponent)
-        try fileManager.createDirectory(at: finalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try fileManager.moveItem(at: extractedModel, to: finalURL)
-        
-        try? fileManager.removeItem(at: extractDir)
-        
-        return finalURL
+        do {
+            try fileManager.unzipItem(at: zipURL, to: extractDir)
+            try? fileManager.removeItem(at: zipURL)
+            
+            let modelInfo = try findModelInDirectory(extractDir)
+            
+            switch modelInfo {
+            case .mlpackage(let url):
+                let finalURL = fileManager.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathComponent(url.lastPathComponent)
+                try fileManager.createDirectory(at: finalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fileManager.moveItem(at: url, to: finalURL)
+                try? fileManager.removeItem(at: extractDir)
+                return finalURL
+                
+            case .mlmodelc(let url):
+                let finalURL = fileManager.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathComponent(url.lastPathComponent)
+                try fileManager.createDirectory(at: finalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fileManager.moveItem(at: url, to: finalURL)
+                try? fileManager.removeItem(at: extractDir)
+                return finalURL
+                
+            case .mlmodelWithWeights(let modelURL, let weightsDir):
+                return extractDir
+                
+            case .standalone(let url):
+                let finalURL = fileManager.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathComponent(url.lastPathComponent)
+                try fileManager.createDirectory(at: finalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fileManager.moveItem(at: url, to: finalURL)
+                try? fileManager.removeItem(at: extractDir)
+                return finalURL
+            }
+        } catch {
+            let fileTree = listDirectoryTree(extractDir, maxEntries: 20)
+            try? fileManager.removeItem(at: extractDir)
+            if let modelError = error as? ModelError {
+                throw modelError
+            } else {
+                throw ModelError.noModelInArchive("Extraction failed. File tree: \(fileTree)")
+            }
+        }
     }
     
-    private func findModelInDirectory(_ directory: URL) throws -> URL {
-        var foundModels: [URL] = []
+    private enum ModelLocation {
+        case mlpackage(URL)
+        case mlmodelc(URL)
+        case mlmodelWithWeights(modelURL: URL, weightsDir: URL)
+        case standalone(URL)
+    }
+    
+    private func findModelInDirectory(_ directory: URL) throws -> ModelLocation {
+        var mlpackages: [URL] = []
+        var mlmodelcs: [URL] = []
+        var mlmodels: [URL] = []
+        var manifestDirs: [URL] = []
         
         if let enumerator = fileManager.enumerator(
             at: directory,
@@ -413,29 +485,72 @@ class ModelManager: ObservableObject {
                     continue
                 }
                 
+                if filename == "Manifest.json" {
+                    manifestDirs.append(fileURL.deletingLastPathComponent())
+                }
+                
                 let pathExtension = fileURL.pathExtension.lowercased()
                 var isDirectory: ObjCBool = false
                 fileManager.fileExists(atPath: fileURL.path, isDirectory: &isDirectory)
                 
                 if pathExtension == "mlpackage" && isDirectory.boolValue {
-                    foundModels.append(fileURL)
+                    mlpackages.append(fileURL)
                 } else if pathExtension == "mlmodelc" && isDirectory.boolValue {
-                    foundModels.append(fileURL)
+                    mlmodelcs.append(fileURL)
                 } else if pathExtension == "mlmodel" && !isDirectory.boolValue {
-                    foundModels.append(fileURL)
+                    mlmodels.append(fileURL)
                 }
             }
         }
         
-        guard let model = foundModels.first else {
-            let topLevelContents = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-                .map { $0.lastPathComponent }
-                .filter { !$0.hasPrefix("__MACOSX") && !$0.hasPrefix(".") }
-                .joined(separator: ", ")
-            throw ModelError.noModelInArchive("No .mlmodel, .mlpackage, or .mlmodelc found. Contents: \(topLevelContents)")
+        if let mlpackage = mlpackages.first {
+            return .mlpackage(mlpackage)
         }
         
-        return model
+        if let manifestDir = manifestDirs.first {
+            let mlpackageURL = manifestDir.appendingPathExtension("mlpackage")
+            try fileManager.moveItem(at: manifestDir, to: mlpackageURL)
+            return .mlpackage(mlpackageURL)
+        }
+        
+        if let mlmodelc = mlmodelcs.first {
+            return .mlmodelc(mlmodelc)
+        }
+        
+        if let mlmodel = mlmodels.first {
+            let parentDir = mlmodel.deletingLastPathComponent()
+            let weightsDir = parentDir.appendingPathComponent("weights")
+            var isDirectory: ObjCBool = false
+            
+            if fileManager.fileExists(atPath: weightsDir.path, isDirectory: &isDirectory) && isDirectory.boolValue {
+                return .mlmodelWithWeights(modelURL: mlmodel, weightsDir: weightsDir)
+            } else {
+                return .standalone(mlmodel)
+            }
+        }
+        
+        let fileTree = listDirectoryTree(directory, maxEntries: 20)
+        throw ModelError.noModelInArchive("No model found. File tree: \(fileTree)")
+    }
+    
+    private func listDirectoryTree(_ directory: URL, maxEntries: Int) -> String {
+        var entries: [String] = []
+        
+        if let enumerator = fileManager.enumerator(at: directory, includingPropertiesForKeys: [.isDirectoryKey], options: []) {
+            for case let fileURL as URL in enumerator {
+                if entries.count >= maxEntries {
+                    entries.append("... (\(enumerator.allObjects.count - maxEntries + 1) more)")
+                    break
+                }
+                
+                let relativePath = fileURL.path.replacingOccurrences(of: directory.path + "/", with: "")
+                var isDirectory: ObjCBool = false
+                fileManager.fileExists(atPath: fileURL.path, isDirectory: &isDirectory)
+                entries.append(relativePath + (isDirectory.boolValue ? "/" : ""))
+            }
+        }
+        
+        return entries.isEmpty ? "(empty)" : entries.joined(separator: ", ")
     }
     
     private func loadCachedModel(from url: URL, workspace: String, project: String, version: String) async throws {
