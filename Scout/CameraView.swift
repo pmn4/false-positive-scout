@@ -11,18 +11,20 @@ struct CameraView: View {
     @ObservedObject var modelManager = ModelManager.shared
     @ObservedObject var thresholdManager = ThresholdManager.shared
     @StateObject private var cameraManager = CameraManager()
-    @State private var isScanning = false
-    @State private var isRecording = false
+    @State private var isCapturing = false
     @State private var errorMessage: String?
     @State private var lastCaptureTime: Date?
     @State private var lastSavedHash: Data?
     @State private var captureCount = 0
     @State private var showThresholdSheet = false
     @State private var showModelPicker = false
-    @State private var hasShownModelPickerOnce = false
+    @State private var currentDetections: [Detection] = []
+    @State private var lastDetectionCount = 0
+    @State private var hapticCooldownUntil: Date = Date.distantPast
     
-    private let frameCheckInterval: TimeInterval = 0.5
+    private let frameCheckInterval: TimeInterval = 0.1
     private let similarityThreshold: Double = 0.85
+    private let hapticCooldown: TimeInterval = 1.0
     
     var body: some View {
         NavigationView {
@@ -32,6 +34,11 @@ struct CameraView: View {
                 
                 if modelManager.currentModel == nil {
                     NoModelOverlay(showModelPicker: $showModelPicker)
+                } else {
+                    DetectionOverlay(
+                        detections: currentDetections,
+                        imageSize: cameraManager.latestFrameSize
+                    )
                 }
                 
                 VStack {
@@ -65,25 +72,15 @@ struct CameraView: View {
                     }
                     
                     VStack(spacing: 16) {
-                        if !isScanning {
-                            Text("Tap Start to begin detection")
-                                .font(.subheadline)
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(.ultraThinMaterial)
-                                .cornerRadius(20)
-                        } else {
-                            Text(isRecording ? "Recording frames..." : "Hold button to save frames")
-                                .font(.subheadline)
-                                .fontWeight(isRecording ? .bold : .regular)
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(isRecording ? AnyShapeStyle(Color.red.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
-                                .cornerRadius(20)
-                                .animation(.easeInOut(duration: 0.3), value: isRecording)
-                        }
+                        Text(isCapturing ? "Saving frames..." : "Hold button to save frames")
+                            .font(.subheadline)
+                            .fontWeight(isCapturing ? .bold : .regular)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(isCapturing ? AnyShapeStyle(Color.red.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
+                            .cornerRadius(20)
+                            .animation(.easeInOut(duration: 0.3), value: isCapturing)
                         
                         HStack(spacing: 20) {
                             Button(action: {
@@ -95,44 +92,25 @@ struct CameraView: View {
                                     .background(.ultraThinMaterial)
                                     .clipShape(Circle())
                             }
-                            .disabled(!isScanning)
                             
-                            if !isScanning {
-                                Button(action: {
-                                    startScanning()
-                                }) {
-                                    Text("Start")
-                                        .font(.headline)
-                                        .foregroundColor(.white)
-                                        .frame(width: 120, height: 50)
-                                        .background(modelManager.currentModel != nil ? Color.blue : Color.gray)
-                                        .cornerRadius(25)
-                                }
-                                .disabled(modelManager.currentModel == nil)
-                            } else {
-                                Button(action: {}) {
-                                    Circle()
-                                        .fill(isRecording ? Color.red : Color.white)
-                                        .frame(width: 70, height: 70)
-                                        .overlay(
-                                            Circle()
-                                                .stroke(Color.white, lineWidth: 4)
-                                        )
-                                        .scaleEffect(isRecording ? 1.1 : 1.0)
-                                        .animation(.easeInOut(duration: 0.2), value: isRecording)
-                                }
-                                .simultaneousGesture(
-                                    DragGesture(minimumDistance: 0)
-                                        .onChanged { _ in
-                                            if !isRecording {
-                                                startRecording()
-                                            }
-                                        }
-                                        .onEnded { _ in
-                                            stopRecording()
-                                        }
-                                )
+                            Button(action: {}) {
+                                Image(systemName: "camera.circle.fill")
+                                    .font(.system(size: 70))
+                                    .foregroundColor(isCapturing ? .red : .white)
+                                    .scaleEffect(isCapturing ? 1.1 : 1.0)
+                                    .animation(.easeInOut(duration: 0.2), value: isCapturing)
                             }
+                            .simultaneousGesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onChanged { _ in
+                                        if !isCapturing {
+                                            startCapturing()
+                                        }
+                                    }
+                                    .onEnded { _ in
+                                        stopCapturing()
+                                    }
+                            )
                             
                             Text("\(captureCount)")
                                 .font(.title2)
@@ -141,41 +119,25 @@ struct CameraView: View {
                                 .background(.ultraThinMaterial)
                                 .clipShape(Circle())
                         }
-                        
-                        if isScanning {
-                            Button(action: {
-                                stopScanning()
-                            }) {
-                                Text("Stop Scouting")
-                                    .font(.subheadline)
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 20)
-                                    .padding(.vertical, 10)
-                                    .background(Color.red.opacity(0.8))
-                                    .cornerRadius(20)
-                            }
-                        }
                     }
                     .padding(.bottom, 40)
                 }
             }
             .navigationTitle("Scout")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    if isScanning {
-                        ProgressView()
-                    }
-                }
-            }
             .onAppear {
                 cameraManager.checkPermissions()
+                captureCount = frameStorage.frames.count
                 
-                if modelManager.currentModel == nil && !hasShownModelPickerOnce {
-                    hasShownModelPickerOnce = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        showModelPicker = true
-                    }
+                if modelManager.currentModel == nil {
+                    showModelPicker = true
+                } else {
+                    startDetection()
+                }
+            }
+            .onChange(of: modelManager.currentModel) { _ in
+                if modelManager.currentModel != nil {
+                    startDetection()
                 }
             }
             .sheet(isPresented: $showThresholdSheet) {
@@ -195,56 +157,46 @@ struct CameraView: View {
         }
     }
     
-    private func startScanning() {
+    private func startDetection() {
         guard modelManager.currentModel != nil else {
-            errorMessage = "No model loaded. Download a model in Settings first."
             return
         }
         
         errorMessage = nil
-        isScanning = true
-        captureCount = frameStorage.frames.count
         cameraManager.startSession()
-        scheduleScan()
+        scheduleDetection()
     }
     
-    private func stopScanning() {
-        isScanning = false
-        isRecording = false
-        lastSavedHash = nil
-        cameraManager.stopSession()
-    }
-    
-    private func startRecording() {
-        isRecording = true
+    private func startCapturing() {
+        isCapturing = true
         lastCaptureTime = nil
         lastSavedHash = nil
     }
     
-    private func stopRecording() {
-        isRecording = false
+    private func stopCapturing() {
+        isCapturing = false
         lastSavedHash = nil
     }
     
-    private func scheduleScan() {
-        guard isScanning else { return }
+    private func scheduleDetection() {
+        guard modelManager.currentModel != nil else { return }
         
         Task {
             try? await Task.sleep(nanoseconds: UInt64(frameCheckInterval * 1_000_000_000))
-            await performScan()
-            scheduleScan()
+            await performDetection()
+            scheduleDetection()
         }
     }
     
-    private func performScan() async {
+    private func performDetection() async {
         guard let image = cameraManager.captureFrame() else {
             return
         }
         
         guard modelManager.currentModel != nil else {
             await MainActor.run {
-                errorMessage = "No model loaded. Please download a model in Settings."
-                stopScanning()
+                errorMessage = "No model loaded."
+                cameraManager.stopSession()
             }
             return
         }
@@ -252,23 +204,28 @@ struct CameraView: View {
         do {
             let detections = try await modelManager.detect(image: image)
             
-            // Only save if recording AND detections found AND different from last saved
-            if isRecording && !detections.isEmpty {
+            await MainActor.run {
+                currentDetections = detections
+                
+                if !detections.isEmpty && lastDetectionCount == 0 {
+                    fireHapticIfReady()
+                }
+                lastDetectionCount = detections.count
+            }
+            
+            if isCapturing && !detections.isEmpty {
                 let now = Date()
                 let currentHash = perceptualHash(image: image)
                 
                 await MainActor.run {
-                    // Re-check isRecording after in-flight detect to prevent save after release
-                    guard isRecording else { return }
+                    guard isCapturing else { return }
                     
-                    // Basic debounce
                     if let lastCapture = lastCaptureTime {
                         guard now.timeIntervalSince(lastCapture) >= frameCheckInterval else {
                             return
                         }
                     }
                     
-                    // Similarity check - skip if too similar to last saved frame
                     if let lastHash = lastSavedHash,
                        let currentHash = currentHash {
                         let hammingDist = hammingDistance(lastHash, currentHash)
@@ -284,7 +241,6 @@ struct CameraView: View {
                     
                     lastCaptureTime = now
                     
-                    // Save frame
                     let imageData = image.jpegData(compressionQuality: 0.8)
                     let frame = CapturedFrame(
                         timestamp: now,
@@ -299,9 +255,18 @@ struct CameraView: View {
         } catch {
             await MainActor.run {
                 errorMessage = error.localizedDescription
-                stopScanning()
             }
         }
+    }
+    
+    private func fireHapticIfReady() {
+        let now = Date()
+        guard now >= hapticCooldownUntil else { return }
+        
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.impactOccurred()
+        
+        hapticCooldownUntil = now.addingTimeInterval(hapticCooldown)
     }
     
     // "It ain't where you from, it's where you at" ~Nas (probably)
@@ -402,6 +367,7 @@ class CameraManager: NSObject, ObservableObject {
     private var currentCamera: AVCaptureDevice.Position = .back
     private var currentInput: AVCaptureDeviceInput?
     private var latestFrame: UIImage?
+    @Published var latestFrameSize: CGSize = .zero
     
     func checkPermissions() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -486,7 +452,12 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             return
         }
         
-        latestFrame = UIImage(cgImage: cgImage)
+        let uiImage = UIImage(cgImage: cgImage)
+        latestFrame = uiImage
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.latestFrameSize = uiImage.size
+        }
     }
 }
 
@@ -629,6 +600,75 @@ struct ThresholdBadge: View {
             )
         }
         .foregroundColor(.primary)
+    }
+}
+
+struct DetectionOverlay: View {
+    let detections: [Detection]
+    let imageSize: CGSize
+    
+    var body: some View {
+        GeometryReader { geometry in
+            let viewSize = geometry.size
+            
+            ForEach(detections) { detection in
+                let box = convertToViewCoordinates(
+                    detection: detection,
+                    imageSize: imageSize,
+                    viewSize: viewSize
+                )
+                
+                Rectangle()
+                    .stroke(Color.green, lineWidth: 2)
+                    .frame(width: box.width, height: box.height)
+                    .position(x: box.x, y: box.y)
+                    .overlay(
+                        Text("\(detection.className) \(Int(detection.confidence * 100))%")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.green.opacity(0.8))
+                            .cornerRadius(4)
+                            .position(x: box.x, y: box.y - box.height / 2 - 12)
+                    )
+            }
+        }
+    }
+    
+    private func convertToViewCoordinates(
+        detection: Detection,
+        imageSize: CGSize,
+        viewSize: CGSize
+    ) -> (x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat) {
+        guard imageSize.width > 0, imageSize.height > 0, viewSize.width > 0, viewSize.height > 0 else {
+            return (0, 0, 0, 0)
+        }
+        
+        let imageAspect = imageSize.width / imageSize.height
+        let viewAspect = viewSize.width / viewSize.height
+        
+        let scale: CGFloat
+        let offsetX: CGFloat
+        let offsetY: CGFloat
+        
+        if imageAspect > viewAspect {
+            scale = viewSize.width / imageSize.width
+            offsetX = 0
+            offsetY = (viewSize.height - imageSize.height * scale) / 2
+        } else {
+            scale = viewSize.height / imageSize.height
+            offsetX = (viewSize.width - imageSize.width * scale) / 2
+            offsetY = 0
+        }
+        
+        let x = CGFloat(detection.x) * scale + offsetX
+        let y = CGFloat(detection.y) * scale + offsetY
+        let width = CGFloat(detection.width) * scale
+        let height = CGFloat(detection.height) * scale
+        
+        return (x, y, width, height)
     }
 }
 
