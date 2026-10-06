@@ -624,12 +624,14 @@ struct DetectionOverlay: View {
             let viewSize = geometry.size
             
             let now = Date()
-            if now.timeIntervalSince(lastLogTime) > 1.0 {
-                DispatchQueue.main.async {
-                    lastLogTime = now
-                    print("🔵 [ScoutDetect] Overlay: imageSize=\(Int(imageSize.width))×\(Int(imageSize.height)), viewSize=\(Int(viewSize.width))×\(Int(viewSize.height)), dets=\(detections.count)")
+            let _: Void = {
+                if now.timeIntervalSince(lastLogTime) > 1.0 {
+                    DispatchQueue.main.async {
+                        lastLogTime = now
+                        print("🔵 [ScoutDetect] Overlay: imageSize=\(Int(imageSize.width))×\(Int(imageSize.height)), viewSize=\(Int(viewSize.width))×\(Int(viewSize.height)), dets=\(detections.count)")
+                    }
                 }
-            }
+            }()
             
             ForEach(detections) { detection in
                 let box = convertToViewCoordinates(

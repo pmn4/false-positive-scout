@@ -501,7 +501,8 @@ class ModelManager: ObservableObject {
         let (data, response) = try await URLSession.shared.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            print("🟡 [ScoutDetect] fetchProjectMetadata failed: HTTP \(httpResponse.statusCode)")
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            print("🟡 [ScoutDetect] fetchProjectMetadata failed: HTTP \(code)")
             return ([], [:])
         }
         
@@ -775,7 +776,7 @@ class ModelManager: ObservableObject {
         var extractedLabels = extractClassLabels(from: mlModel)
         
         let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
-        let versionNum = version.split(separator: "/").last.map(String.init) ?? versionNum
+        let versionNum = version.split(separator: "/").last.map(String.init) ?? version
         
         let inputDesc = mlModel.modelDescription.inputDescriptionsByName.values.first
         let imageConstraint = inputDesc?.imageConstraint
