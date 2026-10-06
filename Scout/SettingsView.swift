@@ -27,6 +27,12 @@ struct SettingsView: View {
     @State private var loadError: String?
     @State private var loadGeneration = 0  // Track async load generation to ignore stale results
     
+    // API key project picker state
+    @State private var apiKeyProjects: [Project] = []
+    @State private var isLoadingApiKeyProjects = false
+    @State private var apiKeyProjectsError: String?
+    @State private var showManualProjectEntry = false
+    
     // Helper to determine active auth method
     private var authStatus: String {
         if oauthManager.isAuthenticated {
@@ -150,16 +156,57 @@ struct SettingsView: View {
                     .padding(.vertical, 4)
                     
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Project ID")
-                            .font(.headline)
+                        HStack {
+                            Text("Project")
+                                .font(.headline)
+                            Spacer()
+                            if isLoadingApiKeyProjects {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            } else if !apiKey.isEmpty && !apiKeyProjects.isEmpty {
+                                Button(action: {
+                                    showManualProjectEntry.toggle()
+                                }) {
+                                    Text(showManualProjectEntry ? "Show List" : "Enter Manually")
+                                        .font(.caption)
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                        }
                         
-                        TextField("my-project", text: $project)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
+                        if showManualProjectEntry || apiKeyProjects.isEmpty {
+                            // Manual entry mode or no projects loaded
+                            TextField("my-workspace/my-project", text: $project)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                        } else {
+                            // Picker mode when projects are available
+                            Picker("Select Project", selection: $project) {
+                                Text("Select a project").tag("")
+                                ForEach(apiKeyProjects) { proj in
+                                    Text(proj.name).tag(proj.id)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                        }
                         
-                        Text(OAuthConfig.isEnabled ? "Required for upload when using API key (optional for OAuth)" : "Your workspace/project slug (e.g., my-workspace/my-project)")
+                        if let error = apiKeyProjectsError {
+                            Text("⚠️ \(error)")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                            Button("Retry") {
+                                loadApiKeyProjects()
+                            }
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                        } else if !apiKeyProjects.isEmpty && !showManualProjectEntry {
+                            Text("\(apiKeyProjects.count) projects available")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text(OAuthConfig.isEnabled ? "Required for upload when using API key (optional for OAuth)" : "Your workspace/project slug (e.g., my-workspace/my-project)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                     .padding(.vertical, 4)
                 } header: {
@@ -486,14 +533,22 @@ struct SettingsView: View {
                     loadWorkspacesAndProjects()
                 }
                 
+                // Load projects for API key picker if API key is present
+                if !apiKey.isEmpty && apiKeyProjects.isEmpty {
+                    loadApiKeyProjects()
+                }
+                
                 // Model is now auto-loaded at app startup by ModelManager.init
             }
             .onChange(of: apiKey) { newValue in
                 // Save API key to Keychain (not plaintext UserDefaults)
                 if newValue.isEmpty {
                     KeychainHelper.deleteAPIKey()
+                    apiKeyProjects = []
+                    apiKeyProjectsError = nil
                 } else {
                     KeychainHelper.saveAPIKey(newValue)
+                    loadApiKeyProjects()
                 }
             }
         }
@@ -597,6 +652,56 @@ struct SettingsView: View {
                     guard self.loadGeneration == expectedGeneration else { return }
                     self.isLoadingProjects = false
                     self.loadError = error.localizedDescription
+                }
+            }
+        }
+    }
+    
+    private func loadApiKeyProjects() {
+        guard !apiKey.isEmpty else {
+            apiKeyProjects = []
+            apiKeyProjectsError = nil
+            return
+        }
+        
+        isLoadingApiKeyProjects = true
+        apiKeyProjectsError = nil
+        showManualProjectEntry = false
+        
+        Task {
+            do {
+                // Try to get workspace from current project or load first workspace
+                var workspaceSlug: String?
+                
+                // If current project has workspace prefix, use it
+                if project.contains("/") {
+                    workspaceSlug = project.split(separator: "/").first.map(String.init)
+                }
+                
+                // Otherwise try to list workspaces and use first
+                if workspaceSlug == nil {
+                    let workspaces = try await RoboflowService.shared.listWorkspaces(apiKey: apiKey)
+                    workspaceSlug = workspaces.first?.url
+                }
+                
+                guard let workspace = workspaceSlug else {
+                    await MainActor.run {
+                        self.isLoadingApiKeyProjects = false
+                        self.apiKeyProjectsError = "No workspace found"
+                    }
+                    return
+                }
+                
+                let loadedProjects = try await RoboflowService.shared.listProjects(workspace: workspace, apiKey: apiKey)
+                await MainActor.run {
+                    self.apiKeyProjects = loadedProjects
+                    self.isLoadingApiKeyProjects = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.isLoadingApiKeyProjects = false
+                    self.apiKeyProjectsError = "Failed to load projects"
+                    self.apiKeyProjects = []
                 }
             }
         }
