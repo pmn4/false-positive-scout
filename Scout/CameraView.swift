@@ -21,6 +21,7 @@ struct CameraView: View {
     @State private var currentDetections: [Detection] = []
     @State private var lastDetectionCount = 0
     @State private var hapticCooldownUntil: Date = Date.distantPast
+    @State private var isLoadingModel = false
     
     private let frameCheckInterval: TimeInterval = 0.1
     private let similarityThreshold: Double = 0.85
@@ -32,7 +33,9 @@ struct CameraView: View {
                 CameraPreview(session: cameraManager.session)
                     .edgesIgnoringSafeArea(.all)
                 
-                if modelManager.currentModel == nil {
+                if isLoadingModel {
+                    LoadingModelOverlay()
+                } else if modelManager.currentModel == nil {
                     NoModelOverlay(showModelPicker: $showModelPicker)
                 } else {
                     DetectionOverlay(
@@ -129,14 +132,19 @@ struct CameraView: View {
                 cameraManager.checkPermissions()
                 captureCount = frameStorage.frames.count
                 
-                if modelManager.currentModel == nil {
-                    showModelPicker = true
+                if modelManager.hasConfiguredModel() {
+                    if modelManager.currentModel == nil {
+                        isLoadingModel = true
+                    } else {
+                        startDetection()
+                    }
                 } else {
-                    startDetection()
+                    showModelPicker = true
                 }
             }
-            .onChange(of: modelManager.currentModel) { _ in
-                if modelManager.currentModel != nil {
+            .onChange(of: modelManager.currentModel) { newModel in
+                if newModel != nil {
+                    isLoadingModel = false
                     startDetection()
                 }
             }
@@ -669,6 +677,36 @@ struct DetectionOverlay: View {
         let height = CGFloat(detection.height) * scale
         
         return (x, y, width, height)
+    }
+}
+
+struct LoadingModelOverlay: View {
+    var body: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            
+            VStack(spacing: 16) {
+                ProgressView()
+                    .scaleEffect(1.5)
+                    .tint(.blue)
+                
+                Text("Loading Model")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                
+                Text("Preparing on-device detection...")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(32)
+            .background(.ultraThinMaterial)
+            .cornerRadius(20)
+            .shadow(radius: 10)
+            
+            Spacer()
+        }
+        .padding()
     }
 }
 

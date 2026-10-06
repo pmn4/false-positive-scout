@@ -702,6 +702,17 @@ class ModelManager: ObservableObject {
         return fileManager.fileExists(atPath: cacheURL.path)
     }
     
+    func hasConfiguredModel() -> Bool {
+        guard let workspace = UserDefaults.standard.string(forKey: "scout_model_workspace"),
+              let project = UserDefaults.standard.string(forKey: "scout_model_project"),
+              let version = UserDefaults.standard.string(forKey: "scout_model_version"),
+              !workspace.isEmpty, !project.isEmpty, !version.isEmpty else {
+            return false
+        }
+        
+        return isModelCached(workspace: workspace, project: project, version: version)
+    }
+    
     private func getCacheDirectory() -> URL {
         let cacheDir = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         return cacheDir.appendingPathComponent("RoboflowModels")
