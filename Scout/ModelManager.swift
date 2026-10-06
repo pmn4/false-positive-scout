@@ -646,6 +646,28 @@ class ModelManager: ObservableObject {
             }
         }
         
+        for (metadataKey, metadataValue) in description.metadata {
+            if let stringValue = metadataValue as? String {
+                for key in ["classes", "names", "class_labels"] {
+                    if metadataKey.description.lowercased().contains(key) {
+                        if let parsed = parseClassLabelsFromString(stringValue) {
+                            return parsed
+                        }
+                    }
+                }
+            }
+        }
+        
+        if let userDefined = description.metadata[MLModelMetadataKey("com.apple.coreml.model.user_defined")] as? [String: String] {
+            for key in ["classes", "names", "class_labels"] {
+                if let value = userDefined[key] {
+                    if let parsed = parseClassLabelsFromString(value) {
+                        return parsed
+                    }
+                }
+            }
+        }
+        
         return []
     }
     
@@ -764,12 +786,26 @@ class ModelManager: ObservableObject {
     // MARK: - Inference
     
     func detect(image: UIImage, thresholdManager: ThresholdManager = ThresholdManager.shared) async throws -> [Detection] {
-        guard let vnModel = currentVNCoreMLModel else {
+        guard let mlModel = currentModel else {
             throw ModelError.noModelLoaded
         }
         
         guard let pixelBuffer = image.toCVPixelBuffer() else {
             throw ModelError.imageConversionFailed
+        }
+        
+        if inferenceBackend == .rfDetrTensors {
+            return try await detectRFDetrDirect(
+                mlModel: mlModel,
+                pixelBuffer: pixelBuffer,
+                imageWidth: Double(image.size.width),
+                imageHeight: Double(image.size.height),
+                thresholdManager: thresholdManager
+            )
+        }
+        
+        guard let vnModel = currentVNCoreMLModel else {
+            throw ModelError.noModelLoaded
         }
         
         let request = VNCoreMLRequest(model: vnModel)
@@ -791,19 +827,100 @@ class ModelManager: ObservableObject {
             )
         }
         
-        if let featureResults = results as? [VNCoreMLFeatureValueObservation] {
-            return try decodeRFDetrTensors(
-                featureResults,
-                imageWidth: Double(image.size.width),
-                imageHeight: Double(image.size.height),
-                thresholdManager: thresholdManager
-            )
+        let resultType = String(describing: type(of: results.first!))
+        throw ModelError.unsupportedModelTypeWithReason("Unsupported result type: \(resultType)")
+    }
+    
+    private func detectRFDetrDirect(
+        mlModel: MLModel,
+        pixelBuffer: CVPixelBuffer,
+        imageWidth: Double,
+        imageHeight: Double,
+        thresholdManager: ThresholdManager
+    ) async throws -> [Detection] {
+        let inputName = mlModel.modelDescription.inputDescriptionsByName.keys.first ?? "image"
+        
+        let input = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: pixelBuffer)])
+        
+        let output = try mlModel.prediction(from: input)
+        
+        guard let boxesFeature = output.featureValue(for: "boxes")?.multiArrayValue,
+              let scoresFeature = output.featureValue(for: "scores")?.multiArrayValue,
+              let labelsFeature = output.featureValue(for: "labels")?.multiArrayValue else {
+            let availableOutputs = mlModel.modelDescription.outputDescriptionsByName.keys.joined(separator: ", ")
+            throw ModelError.unsupportedModelTypeWithReason("RF-DETR outputs not found. Available: \(availableOutputs)")
         }
         
-        let resultType = String(describing: type(of: results.first!))
-        let featureNames = results.compactMap { ($0 as? VNCoreMLFeatureValueObservation)?.featureName }
-        let featureInfo = featureNames.isEmpty ? "" : " (features: \(featureNames.joined(separator: ", ")))"
-        throw ModelError.unsupportedModelTypeWithReason("Unsupported result type: \(resultType)\(featureInfo)")
+        let batched = boxesFeature.shape.count == 3
+        let numDetections: Int
+        if batched {
+            numDetections = boxesFeature.shape[1].intValue
+        } else if boxesFeature.shape.count == 2 {
+            numDetections = boxesFeature.shape[0].intValue
+        } else {
+            throw ModelError.unsupportedModelTypeWithReason("Unexpected boxes shape: \(boxesFeature.shape)")
+        }
+        
+        var detections: [Detection] = []
+        detections.reserveCapacity(min(numDetections, 64))
+        
+        for i in 0..<numDetections {
+            let score: Float
+            let labelIdx: Int
+            let cx: Float
+            let cy: Float
+            let w: Float
+            let h: Float
+            
+            if batched {
+                score = scoresFeature[[0, NSNumber(value: i)] as [NSNumber]].floatValue
+                labelIdx = labelsFeature[[0, NSNumber(value: i)] as [NSNumber]].intValue
+                cx = boxesFeature[[0, NSNumber(value: i), 0] as [NSNumber]].floatValue
+                cy = boxesFeature[[0, NSNumber(value: i), 1] as [NSNumber]].floatValue
+                w = abs(boxesFeature[[0, NSNumber(value: i), 2] as [NSNumber]].floatValue)
+                h = abs(boxesFeature[[0, NSNumber(value: i), 3] as [NSNumber]].floatValue)
+            } else {
+                let scoreIdx: [NSNumber] = (scoresFeature.shape.count == 2)
+                    ? [0, NSNumber(value: i)]
+                    : [NSNumber(value: i)]
+                let labelIndex: [NSNumber] = (labelsFeature.shape.count == 2)
+                    ? [0, NSNumber(value: i)]
+                    : [NSNumber(value: i)]
+                score = scoresFeature[scoreIdx].floatValue
+                labelIdx = labelsFeature[labelIndex].intValue
+                cx = boxesFeature[[NSNumber(value: i), 0] as [NSNumber]].floatValue
+                cy = boxesFeature[[NSNumber(value: i), 1] as [NSNumber]].floatValue
+                w = abs(boxesFeature[[NSNumber(value: i), 2] as [NSNumber]].floatValue)
+                h = abs(boxesFeature[[NSNumber(value: i), 3] as [NSNumber]].floatValue)
+            }
+            
+            let className: String
+            if labelIdx >= 0 && labelIdx < classLabels.count {
+                className = classLabels[labelIdx]
+            } else {
+                className = "unknown"
+            }
+            
+            let effectiveThreshold = Float(thresholdManager.effectiveThreshold(for: className))
+            guard score > 0, score >= effectiveThreshold else { continue }
+            guard w > 0, h > 0 else { continue }
+            
+            let centerX = Double(cx) * imageWidth
+            let centerY = Double(cy) * imageHeight
+            let width = Double(w) * imageWidth
+            let height = Double(h) * imageHeight
+            
+            detections.append(Detection(
+                x: centerX,
+                y: centerY,
+                width: width,
+                height: height,
+                confidence: Double(score),
+                className: className
+            ))
+        }
+        
+        return detections
     }
     
     private func decodeVisionObjects(
