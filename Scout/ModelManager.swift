@@ -839,16 +839,21 @@ class ModelManager: ObservableObject {
         thresholdManager: ThresholdManager
     ) async throws -> [Detection] {
         let inputName = mlModel.modelDescription.inputDescriptionsByName.keys.first ?? "image"
-        
         let input = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: pixelBuffer)])
-        
         let output = try mlModel.prediction(from: input)
-        
+        return try decodeRFDetrOutput(output, imageWidth: imageWidth, imageHeight: imageHeight, thresholdManager: thresholdManager)
+    }
+    
+    private func decodeRFDetrOutput(
+        _ output: MLFeatureProvider,
+        imageWidth: Double,
+        imageHeight: Double,
+        thresholdManager: ThresholdManager
+    ) throws -> [Detection] {
         guard let boxesFeature = output.featureValue(for: "boxes")?.multiArrayValue,
               let scoresFeature = output.featureValue(for: "scores")?.multiArrayValue,
               let labelsFeature = output.featureValue(for: "labels")?.multiArrayValue else {
-            let availableOutputs = mlModel.modelDescription.outputDescriptionsByName.keys.joined(separator: ", ")
-            throw ModelError.unsupportedModelTypeWithReason("RF-DETR outputs not found. Available: \(availableOutputs)")
+            throw ModelError.unsupportedModelTypeWithReason("RF-DETR outputs (boxes/scores/labels) not found in model output")
         }
         
         let batched = boxesFeature.shape.count == 3
