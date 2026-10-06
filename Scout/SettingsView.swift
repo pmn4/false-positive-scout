@@ -43,7 +43,7 @@ struct SettingsView: View {
             Form {
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Sign in with Roboflow (OAuth) or paste an API key for quick setup.")
+                        Text(OAuthConfig.isEnabled ? "Sign in with Roboflow (OAuth) or paste an API key for quick setup." : "Paste an API key to get started.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                         
@@ -61,7 +61,8 @@ struct SettingsView: View {
                     Text("About")
                 }
                 
-                Section {
+                if OAuthConfig.isEnabled {
+                    Section {
                     if oauthManager.isAuthenticated {
                         HStack {
                             Image(systemName: "checkmark.circle.fill")
@@ -117,12 +118,13 @@ struct SettingsView: View {
                                 .foregroundColor(.red)
                         }
                     }
-                } header: {
-                    Text("Authentication (Option 1: OAuth)")
-                } footer: {
-                    Text("Preferred for production. Requires OAuth app setup with 9 scopes. Takes priority over API key when signed in.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    } header: {
+                        Text("Authentication (Option 1: OAuth)")
+                    } footer: {
+                        Text("Preferred for production. Requires OAuth app setup with 9 scopes. Takes priority over API key when signed in.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 
                 Section {
@@ -161,9 +163,9 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 4)
                 } header: {
-                    Text("Authentication (Option 2: API Key)")
+                    Text(OAuthConfig.isEnabled ? "Authentication (Option 2: API Key)" : "Authentication (API Key)")
                 } footer: {
-                    Text("Quick clone-and-build path. No OAuth or Universal Links setup needed. Get API key from app.roboflow.com/settings/api")
+                    Text(OAuthConfig.isEnabled ? "Quick clone-and-build path. No OAuth or Universal Links setup needed. Get API key from app.roboflow.com/settings/api" : "Get API key from app.roboflow.com/settings/api. Works with free Apple Personal Team (no paid developer account needed).")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

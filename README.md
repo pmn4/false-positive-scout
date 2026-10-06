@@ -20,7 +20,7 @@ When training object detection models, it's important to include negative exampl
 
 - 📱 **Native iOS App** – Built with SwiftUI for iPhone
 - 🧠 **On-Device Inference** – Runs object detection models locally via Core ML (no network required after download)
-- 🔒 **Dual Authentication** – OAuth 2.1 (PKCE) or API key (clone-and-build friendly)
+- 🔒 **API Key Authentication** – Works with free Apple Personal Team (OAuth optional for paid accounts)
 - 📷 **Front & Back Camera** – Switch between cameras on the fly
 - 🎥 **Hold-to-Record** – Only saves frames while you hold the record button
 - 🎯 **Smart Deduplication** – Uses perceptual hashing to skip similar frames
@@ -43,16 +43,15 @@ When training object detection models, it's important to include negative exampl
 
 ## Getting Started
 
-Scout offers **two authentication options**:
+Scout uses **API Key authentication** by default:
 
-1. **OAuth 2.1 (Recommended for production):** Sign in with Roboflow via Universal Links
-2. **API Key (Quick clone-and-build):** Paste an API key — no OAuth setup needed
-
-Choose the path that fits your workflow. OAuth is preferred for App Store distribution and provides better security, but API key is faster for local testing.
+- **Quick setup:** Paste your Roboflow API key, no paid Apple Developer account needed
+- **Works with free Apple Personal Team** (automatic code signing)
+- OAuth 2.1 (Sign in with Roboflow) is **optional** and requires a paid Apple Developer Program membership
 
 ---
 
-### Installation
+### Quick Start (API Key)
 
 1. **Clone the repository:**
    ```bash
@@ -67,53 +66,66 @@ Choose the path that fits your workflow. OAuth is preferred for App Store distri
 
 3. **Build and Run:**
    - Select your iPhone or simulator as the build target
-   - Press `Cmd+R` to build and run
+   - Press `Cmd+R` to build and run (uses free Apple Personal Team T6FND7233Y)
    - Accept camera permission when prompted
+
+4. **Configure in the app:**
+   - Open Settings tab
+   - Paste your Roboflow API key (get from [app.roboflow.com/settings/api](https://app.roboflow.com/settings/api))
+   - Enter your project ID (e.g., `my-workspace/my-project` or just `my-project`)
+   - Download your model and start scanning
 
 ---
 
-## Configuration Path 1: OAuth (Recommended)
+## Optional: Enable OAuth (Paid Apple Developer Program Required)
 
-#### 1. Set Up Universal Links for OAuth Redirect
+OAuth (Sign in with Roboflow) is **disabled by default** because it requires:
+- Paid Apple Developer Program membership ($99/year)
+- Associated Domains capability (not available with free Personal Team)
+- Universal Links and AASA file hosting
 
-Scout uses **https://** redirect URIs via iOS Universal Links (required by Roboflow OAuth).
+**To enable OAuth:**
 
-**Option A: Use the provided pmnewell.com URL (recommended for testing):**
-- Redirect URI: `https://pmnewell.com/false-positive-scout/oauth/callback`
-- The `apple-app-site-association` file is hosted at `https://pmnewell.com/.well-known/apple-app-site-association` (maintained in pmn4/pmn4.github.io repository)
-- See `docs/apple-app-site-association` in this repository for a reference template
-- Skip to step 2 (no hosting setup needed)
+#### 1. Enable OAuth in Code
 
-**Option B: Use your own domain (for production):**
-1. **Host the apple-app-site-association file:**
-   - Copy `apple-app-site-association` from this repository
-   - Replace `TEAM_ID` with your Apple Developer Team ID
-   - Host it at `https://yourdomain.com/.well-known/apple-app-site-association`
-   - OR at `https://yourdomain.com/apple-app-site-association` (root fallback)
-   - Must be served with `Content-Type: application/json` or `application/pkcs7-mime`
-   - Must be accessible over HTTPS (certificate valid, no redirects)
+Open `Scout/OAuthConfig.swift` and change:
+```swift
+static let isEnabled = false
+```
+to:
+```swift
+static let isEnabled = true
+```
 
-2. **Update the redirect URI in code:**
-   - Open `Scout/OAuthManager.swift`
-   - Update `redirectURI` to your domain + path (e.g., `https://yourdomain.com/oauth/callback`)
-   - Ensure the path matches what's in your `apple-app-site-association` file
+#### 2. Add Associated Domains Capability
 
-#### 2. Configure Associated Domains in Xcode
+**This requires a paid Apple Developer Program account:**
 
-1. **Open the project in Xcode:**
-   ```bash
-   open Scout.xcodeproj
-   ```
+1. Open `Scout.xcodeproj` in Xcode
+2. Select the **Scout** target
+3. Go to **Signing & Capabilities** tab
+4. Update your Team to your paid Apple Developer Program team
+5. Click **+ Capability** and add **Associated Domains**
+6. Add domain: `applinks:pmnewell.com` (or `applinks:yourdomain.com` if hosting your own AASA)
+7. Enable the entitlements: in project build settings, set `CODE_SIGN_ENTITLEMENTS = Scout/Scout.entitlements`
 
-2. **Add Associated Domains capability:**
-   - Select the **Scout** target
-   - Go to **Signing & Capabilities** tab
-   - Click **+ Capability**
-   - Add **Associated Domains**
-   - Add domain: `applinks:pmnewell.com` (or `applinks:yourdomain.com` if using your own)
-   - Do NOT include `https://` or paths in the Associated Domains entry
+#### 3. Host apple-app-site-association File
 
-#### 3. Register a Roboflow OAuth App
+Scout's default redirect URI is `https://pmnewell.com/false-positive-scout/oauth/callback`.
+
+**Option A: Use pmnewell.com (testing):**
+- AASA is already hosted at `https://pmnewell.com/.well-known/apple-app-site-association`
+- See `docs/apple-app-site-association` for reference template
+- Skip to step 4
+
+**Option B: Use your own domain:**
+1. Copy template from `docs/apple-app-site-association`
+2. Replace `<TEAMID>` with your Apple Developer Team ID
+3. Host at `https://yourdomain.com/.well-known/apple-app-site-association`
+4. Update `redirectURI` in `Scout/OAuthManager.swift` to match your domain
+5. Update Associated Domains in Xcode to `applinks:yourdomain.com`
+
+#### 4. Register a Roboflow OAuth App
 
 1. **Open Roboflow Developer Settings:**
    - Log in to [Roboflow](https://app.roboflow.com)
@@ -174,38 +186,6 @@ Scout uses **https://** redirect URIs via iOS Universal Links (required by Robof
 8. **Adjust detection threshold (optional):**
    - Set **Confidence Threshold** (default: 40%)
    - Lower values capture more detections, including weak false positives
-
----
-
-## Configuration Path 2: API Key (Quick Setup)
-
-**No OAuth, no Universal Links, no AASA hosting required.** Ideal for clone-and-build or quick testing.
-
-1. **Get your Roboflow API key:**
-   - Log in to [Roboflow](https://app.roboflow.com)
-   - Go to **Settings > API**
-   - Copy your API key
-
-2. **Configure Scout:**
-   - Open Scout and tap the **Settings** tab
-   - Scroll to **Authentication (Option 2: API Key)**
-   - Paste your **API Key**
-   - Enter your **Project ID** (from your project URL, e.g., `my-project`)
-
-3. **Download an on-device model:**
-   - **Current limitation:** In-app model download requires OAuth authentication
-   - **API key users cannot download models directly in Scout at this time**
-   - **Workaround options:**
-     - Sign in with OAuth to download the model, then sign out and use API key for uploads
-     - Or manually download a Core ML model from Roboflow and load it via code (not covered in this quick path)
-
-4. **Start scouting:**
-   - API key will be used for upload, tagging, nullify, and batch creation
-   - All upload features work the same as OAuth path
-
-**Notes:** 
-- OAuth takes priority. If you're signed in with OAuth, the API key is ignored. Sign out to use API key for uploads.
-- The "Start" button on the Scan tab remains disabled until a model is loaded (requires OAuth model download for now).
 
 ---
 

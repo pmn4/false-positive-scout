@@ -3,7 +3,7 @@
     "apps": [],
     "details": [
       {
-        "appID": "<TEAMID>.com.scout.app",
+        "appID": "<TEAMID>.com.pmnewell.falsepositivescout",
         "paths": [
           "/false-positive-scout/oauth/callback",
           "/false-positive-scout/oauth/callback/*"

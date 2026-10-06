@@ -16,7 +16,7 @@ If you are hosting your own custom domain for OAuth:
 
 1. Copy `apple-app-site-association` from this directory
 2. Replace `<TEAMID>` with your Apple Developer Team ID (found in Xcode: Scout target > Signing & Capabilities > Team)
-3. Update the bundle ID if you've changed it from `com.scout.app`
+3. Update the bundle ID if you've changed it from `com.pmnewell.falsepositivescout`
 4. Host the file at `https://yourdomain.com/.well-known/apple-app-site-association`
 5. Ensure:
    - Served over HTTPS with valid certificate
