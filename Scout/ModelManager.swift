@@ -41,21 +41,31 @@ class ModelManager: ObservableObject {
     
     // MARK: - Model Discovery
     
-    func listModelVersions(workspace: String, project: String) async throws -> [ModelVersion] {
-        let accessToken = try await OAuthManager.shared.getAccessToken()
-        
-        // Extract project slug from qualified ID
-        let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
-        
-        let url = URL(string: "https://api.roboflow.com/\(workspace)/\(projectSlug)")!
+    func listModelVersions(workspace: String, project: String, apiKey: String? = nil) async throws -> [ModelVersion] {
+        var url = URL(string: "https://api.roboflow.com/\(workspace)/\(project)")!
         var request = URLRequest(url: url)
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        
+        if let key = apiKey, !key.isEmpty {
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+            components.queryItems = [URLQueryItem(name: "api_key", value: key)]
+            url = components.url!
+            request.url = url
+        } else if OAuthManager.shared.isAuthenticated {
+            let accessToken = try await OAuthManager.shared.getAccessToken()
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        } else {
+            throw ModelError.authenticationRequired
+        }
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw ModelError.listFailed
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            let errorBody = String(data: data, encoding: .utf8) ?? ""
+            throw ModelError.listFailedWithReason("HTTP \(httpResponse.statusCode): \(errorBody)")
         }
         
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -94,7 +104,7 @@ class ModelManager: ObservableObject {
     
     // MARK: - Model Download & Caching
     
-    func downloadModel(workspace: String, project: String, version: String) async throws {
+    func downloadModel(workspace: String, project: String, version: String, apiKey: String? = nil) async throws {
         await MainActor.run {
             isDownloading = true
             downloadProgress = 0.0
@@ -123,12 +133,20 @@ class ModelManager: ObservableObject {
         }
         
         // Download Core ML model from Roboflow (roboflow-swift pattern)
-        let accessToken = try await OAuthManager.shared.getAccessToken()
-        
-        // GET /coreml/{project}/{version} endpoint (version is numeric N)
-        let downloadURL = URL(string: "https://api.roboflow.com/coreml/\(projectSlug)/\(versionNum)")!
+        var downloadURL = URL(string: "https://api.roboflow.com/coreml/\(projectSlug)/\(versionNum)")!
         var request = URLRequest(url: downloadURL)
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        
+        if let key = apiKey, !key.isEmpty {
+            var components = URLComponents(url: downloadURL, resolvingAgainstBaseURL: false)!
+            components.queryItems = [URLQueryItem(name: "api_key", value: key)]
+            downloadURL = components.url!
+            request.url = downloadURL
+        } else if OAuthManager.shared.isAuthenticated {
+            let accessToken = try await OAuthManager.shared.getAccessToken()
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        } else {
+            throw ModelError.authenticationRequired
+        }
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
@@ -439,6 +457,7 @@ class ModelManager: ObservableObject {
 
 enum ModelError: LocalizedError {
     case listFailed
+    case listFailedWithReason(String)
     case exportFailed
     case noDownloadLink
     case downloadFailed(String)
@@ -447,11 +466,14 @@ enum ModelError: LocalizedError {
     case noModelLoaded
     case imageConversionFailed
     case unsupportedModelType
+    case authenticationRequired
     
     var errorDescription: String? {
         switch self {
         case .listFailed:
             return "Failed to list model versions"
+        case .listFailedWithReason(let reason):
+            return "Failed to list model versions: \(reason)"
         case .exportFailed:
             return "Failed to export Core ML model"
         case .noDownloadLink:
@@ -468,6 +490,8 @@ enum ModelError: LocalizedError {
             return "Failed to convert image for inference"
         case .unsupportedModelType:
             return "This model type outputs feature maps requiring custom post-processing that is not yet implemented. Please use a different model architecture (e.g., YOLOv5, YOLOv8, or standard Vision-compatible detector)."
+        case .authenticationRequired:
+            return "Please sign in with Roboflow or configure an API key in Settings"
         }
     }
 }

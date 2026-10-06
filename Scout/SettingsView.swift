@@ -675,7 +675,7 @@ struct SettingsView: View {
             } catch {
                 await MainActor.run {
                     self.isLoadingApiKeyProjects = false
-                    self.apiKeyProjectsError = "Failed to load projects"
+                    self.apiKeyProjectsError = error.localizedDescription
                     self.apiKeyProjects = []
                 }
             }
@@ -690,7 +690,8 @@ struct SettingsView: View {
         
         Task {
             do {
-                let versions = try await ModelManager.shared.listModelVersions(workspace: workspace, project: project)
+                let apiKey = oauthManager.isAuthenticated ? nil : KeychainHelper.loadAPIKey()
+                let versions = try await ModelManager.shared.listModelVersions(workspace: workspace, project: project, apiKey: apiKey)
                 await MainActor.run {
                     // Ignore stale results (don't touch flag - newer load owns it)
                     guard self.loadGeneration == expectedGeneration else { return }
@@ -745,10 +746,12 @@ struct SettingsView: View {
         
         Task {
             do {
+                let apiKey = oauthManager.isAuthenticated ? nil : KeychainHelper.loadAPIKey()
                 try await ModelManager.shared.downloadModel(
                     workspace: modelWorkspace,
                     project: modelProject,
-                    version: modelVersion
+                    version: modelVersion,
+                    apiKey: apiKey
                 )
             } catch {
                 await MainActor.run {

@@ -80,22 +80,30 @@ class RoboflowService {
     func listWorkspaces(apiKey: String? = nil) async throws -> [Workspace] {
         let auth = try await getAuthMethod(apiKey: apiKey)
         
-        guard case .oauth(let token) = auth else {
+        var url = URL(string: "https://api.roboflow.com/")!
+        var request = URLRequest(url: url)
+        
+        switch auth {
+        case .oauth(let token):
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        case .apiKey(let key):
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+            components.queryItems = [URLQueryItem(name: "api_key", value: key)]
+            url = components.url!
+            request.url = url
+        case .none:
             throw RoboflowError.authenticationRequired
         }
-        
-        let url = URL(string: "https://api.roboflow.com/")!
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw RoboflowError.apiError(statusCode: 0, message: "Failed to fetch workspaces")
+            throw RoboflowError.apiError(statusCode: 0, message: "Invalid response from server")
         }
         
         guard httpResponse.statusCode == 200 else {
-            throw RoboflowError.apiError(statusCode: httpResponse.statusCode, message: "Failed to fetch workspaces")
+            let errorBody = String(data: data, encoding: .utf8) ?? ""
+            throw RoboflowError.apiError(statusCode: httpResponse.statusCode, message: "Failed to fetch workspaces: \(errorBody)")
         }
         
         let decoder = JSONDecoder()
@@ -118,7 +126,7 @@ class RoboflowService {
             }
         }
         
-        return []
+        throw RoboflowError.apiError(statusCode: httpResponse.statusCode, message: "No workspace found in API response")
     }
     
     // List all projects in a workspace
@@ -147,7 +155,8 @@ class RoboflowService {
         }
         
         guard httpResponse.statusCode == 200 else {
-            throw RoboflowError.apiError(statusCode: httpResponse.statusCode, message: "Failed to fetch projects")
+            let errorBody = String(data: data, encoding: .utf8) ?? ""
+            throw RoboflowError.apiError(statusCode: httpResponse.statusCode, message: "Failed to fetch projects: \(errorBody)")
         }
         
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
