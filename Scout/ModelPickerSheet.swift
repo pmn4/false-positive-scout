@@ -392,6 +392,8 @@ struct VersionStatusView: View {
     @Binding var lastError: String?
     let onDownload: () -> Void
     
+    @State private var showRedownloadConfirm = false
+    
     private var isCurrentModel: Bool {
         let projectSlug = modelProject.split(separator: "/").last.map(String.init) ?? modelProject
         let versionNum = selectedVersion.split(separator: "/").last.map(String.init) ?? selectedVersion
@@ -399,6 +401,17 @@ struct VersionStatusView: View {
             modelManager.loadedWorkspace == modelWorkspace &&
             modelManager.loadedProject == projectSlug &&
             modelManager.loadedVersion == versionNum
+    }
+    
+    private func redownload() {
+        do {
+            let projectSlug = modelProject.split(separator: "/").last.map(String.init) ?? modelProject
+            let versionNum = selectedVersion.split(separator: "/").last.map(String.init) ?? selectedVersion
+            try modelManager.clearCachedModel(workspace: modelWorkspace, project: projectSlug, version: versionNum)
+            onDownload()
+        } catch {
+            lastError = "Failed to clear cache: \(error.localizedDescription)"
+        }
     }
     
     var body: some View {
@@ -414,14 +427,26 @@ struct VersionStatusView: View {
                     onDownload()
                 })
             } else if isCurrentModel {
-                ReadyView()
+                ReadyView(onRedownload: {
+                    showRedownloadConfirm = true
+                })
             } else if isCached {
-                CachedModelView(onLoad: onDownload)
+                CachedModelView(onLoad: onDownload, onRedownload: {
+                    showRedownloadConfirm = true
+                })
             } else {
                 DownloadButton(onDownload: onDownload)
             }
         }
         .padding(.vertical, 4)
+        .alert("Re-download Model?", isPresented: $showRedownloadConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Re-download", role: .destructive) {
+                redownload()
+            }
+        } message: {
+            Text("This will clear the cached model and download it again. Classes and colors will be refreshed.")
+        }
     }
 }
 
@@ -486,19 +511,30 @@ struct ErrorView: View {
 }
 
 struct ReadyView: View {
+    let onRedownload: () -> Void
+    
     var body: some View {
-        HStack {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundColor(.green)
-            Text("Ready - This model is currently running")
-                .font(.caption)
-                .foregroundColor(.green)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                Text("Ready - This model is currently running")
+                    .font(.caption)
+                    .foregroundColor(.green)
+            }
+            
+            Button("Re-download") {
+                onRedownload()
+            }
+            .font(.caption)
+            .foregroundColor(.orange)
         }
     }
 }
 
 struct CachedModelView: View {
     let onLoad: () -> Void
+    let onRedownload: () -> Void
     
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -510,10 +546,18 @@ struct CachedModelView: View {
                     .foregroundColor(.blue)
             }
             
-            Button("Load Model") {
-                onLoad()
+            HStack(spacing: 12) {
+                Button("Load Model") {
+                    onLoad()
+                }
+                .font(.caption)
+                
+                Button("Re-download") {
+                    onRedownload()
+                }
+                .font(.caption)
+                .foregroundColor(.orange)
             }
-            .font(.caption)
         }
     }
 }

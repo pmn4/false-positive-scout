@@ -320,7 +320,13 @@ class ModelManager: ObservableObject {
         }
         
         var preprocessInfo = extractPreprocessingInfo(from: json)
-        let (classNames, classColors) = extractClassMetadataFromAPI(json: json)
+        
+        let (classNames, classColors) = try await fetchProjectMetadata(
+            workspace: workspace,
+            project: projectSlug,
+            version: versionNum,
+            apiKey: apiKey
+        )
         
         guard let modelURLString = coremlDict["model"] as? String,
               let modelURL = URL(string: modelURLString) else {
@@ -470,45 +476,71 @@ class ModelManager: ObservableObject {
         }
     }
     
-    private func extractClassMetadataFromAPI(json: [String: Any]) -> ([String], [String: String]) {
+    private func fetchProjectMetadata(
+        workspace: String,
+        project: String,
+        version: String,
+        apiKey: String?
+    ) async throws -> ([String], [String: String]) {
         var classNames: [String] = []
         var classColors: [String: String] = [:]
         
+        var projectURL = URL(string: "https://api.roboflow.com/\(workspace)/\(project)")!
+        var request = URLRequest(url: projectURL)
+        
+        if let key = apiKey, !key.isEmpty {
+            var components = URLComponents(url: projectURL, resolvingAgainstBaseURL: false)!
+            components.queryItems = [URLQueryItem(name: "api_key", value: key)]
+            projectURL = components.url!
+            request.url = projectURL
+        } else if OAuthManager.shared.isAuthenticated {
+            let accessToken = try await OAuthManager.shared.getAccessToken()
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            return ([], [:])
+        }
+        
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return ([], [:])
+        }
+        
         if let project = json["project"] as? [String: Any] {
-            if let classes = project["classes"] as? [String: Any] {
-                let sortedClasses = classes.keys.compactMap { key -> (Int, String)? in
-                    guard let index = Int(key), let name = classes[key] as? String else { return nil }
-                    return (index, name)
-                }.sorted { $0.0 < $1.0 }
-                classNames = sortedClasses.map { $0.1 }
-            }
-            
             if let colors = project["colors"] as? [String: String] {
                 classColors = colors
+            }
+            
+            if let classesDict = project["classes"] as? [String: Any] {
+                classNames = classesDict.keys.sorted()
+            }
+        }
+        
+        if let versions = json["versions"] as? [[String: Any]] {
+            if let versionData = versions.first(where: { v in
+                if let vId = v["id"] as? String {
+                    return vId.split(separator: "/").last.map(String.init) == version
+                }
+                return false
+            }) {
+                if let classMap = versionData["class_map"] as? [String: Int] {
+                    let sortedClasses = classMap.sorted { $0.value < $1.value }
+                    classNames = sortedClasses.map { $0.key }
+                } else if let classes = versionData["classes"] as? [String] {
+                    classNames = classes
+                }
             }
         }
         
         if classNames.isEmpty, let version = json["version"] as? [String: Any] {
-            if let classes = version["classes"] as? [String: Any] {
-                let sortedClasses = classes.keys.compactMap { key -> (Int, String)? in
-                    guard let index = Int(key), let name = classes[key] as? String else { return nil }
-                    return (index, name)
-                }.sorted { $0.0 < $1.0 }
-                classNames = sortedClasses.map { $0.1 }
+            if let classMap = version["class_map"] as? [String: Int] {
+                let sortedClasses = classMap.sorted { $0.value < $1.value }
+                classNames = sortedClasses.map { $0.key }
+            } else if let classes = version["classes"] as? [String] {
+                classNames = classes
             }
-            
-            if classColors.isEmpty, let colors = version["colors"] as? [String: String] {
-                classColors = colors
-            }
-        }
-        
-        if classNames.isEmpty, let classArray = json["classes"] as? [String] {
-            classNames = classArray
-        }
-        
-        if classNames.isEmpty, let version = json["version"] as? [String: Any],
-           let classArray = version["classes"] as? [String] {
-            classNames = classArray
         }
         
         return (classNames, classColors)
@@ -750,6 +782,30 @@ class ModelManager: ObservableObject {
             colors = colorMap
         }
         
+        if extractedLabels.isEmpty || colors.isEmpty {
+            let apiKey = KeychainHelper.loadAPIKey()
+            if let (fetchedNames, fetchedColors) = try? await fetchProjectMetadata(
+                workspace: workspace,
+                project: projectSlug,
+                version: versionNum,
+                apiKey: apiKey
+            ) {
+                if extractedLabels.isEmpty && !fetchedNames.isEmpty {
+                    extractedLabels = fetchedNames
+                    if let classData = try? JSONEncoder().encode(fetchedNames) {
+                        UserDefaults.standard.set(classData, forKey: "scout_model_classes_\(workspace)_\(projectSlug)_\(versionNum)")
+                    }
+                }
+                
+                if colors.isEmpty && !fetchedColors.isEmpty {
+                    colors = fetchedColors
+                    if let colorData = try? JSONEncoder().encode(fetchedColors) {
+                        UserDefaults.standard.set(colorData, forKey: "scout_model_colors_\(workspace)_\(projectSlug)_\(versionNum)")
+                    }
+                }
+            }
+        }
+        
         var preprocessMode: PreprocessingMode = .stretch
         if let preprocessData = UserDefaults.standard.data(forKey: "scout_model_preprocessing_\(workspace)_\(projectSlug)_\(versionNum)"),
            let preprocessInfo = try? JSONDecoder().decode(ModelPreprocessingInfo.self, from: preprocessData) {
@@ -927,6 +983,20 @@ class ModelManager: ObservableObject {
         if fileManager.fileExists(atPath: cacheDir.path) {
             try fileManager.removeItem(at: cacheDir)
         }
+    }
+    
+    func clearCachedModel(workspace: String, project: String, version: String) throws {
+        let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
+        let versionNum = version.split(separator: "/").last.map(String.init) ?? version
+        let cacheURL = getCacheURL(workspace: workspace, project: projectSlug, version: versionNum)
+        
+        if fileManager.fileExists(atPath: cacheURL.path) {
+            try fileManager.removeItem(at: cacheURL)
+        }
+        
+        UserDefaults.standard.removeObject(forKey: "scout_model_classes_\(workspace)_\(projectSlug)_\(versionNum)")
+        UserDefaults.standard.removeObject(forKey: "scout_model_colors_\(workspace)_\(projectSlug)_\(versionNum)")
+        UserDefaults.standard.removeObject(forKey: "scout_model_preprocessing_\(workspace)_\(projectSlug)_\(versionNum)")
     }
     
     // Load cached model at app startup if configured
