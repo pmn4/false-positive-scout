@@ -43,12 +43,12 @@ When training object detection models, it's important to include negative exampl
 
 ## Getting Started
 
-Scout uses **OAuth 2.1 (Sign in with Roboflow)** as the primary authentication method:
+Scout uses **API Key authentication**:
 
 - **Works with free Apple Personal Team** (no paid Apple Developer account needed)
-- Uses custom URL scheme relay (`scout://`) - no Universal Links / Associated Domains required
-- Automatic workspace and project discovery
-- **Alternative:** API Key authentication (paste key manually)
+- Paste your Roboflow API key and project ID
+- All features supported (model download, scan, upload, nullify)
+- **OAuth Note:** OAuth 2.1 implementation exists but is disabled because Roboflow requires a client secret (no public client option as of Oct 2026)
 
 ---
 
@@ -70,24 +70,33 @@ Scout uses **OAuth 2.1 (Sign in with Roboflow)** as the primary authentication m
    - Press `Cmd+R` to build and run (uses free Apple Personal Team T6FND7233Y)
    - Accept camera permission when prompted
 
-4. **Sign in:**
-   - Open Settings tab
-   - Tap "Sign in with Roboflow"
-   - Log in to Roboflow in the browser
-   - Select your workspace and project from the pickers
-   - Download your model and start scanning
-
-**Alternative (API Key):**
-- Instead of signing in, scroll to "Use an API key instead"
-- Paste your Roboflow API key (get from [app.roboflow.com/settings/api](https://app.roboflow.com/settings/api))
-- Enter your project ID (e.g., `my-workspace/my-project` or just `my-project`)
-- Download your model and start scanning
+4. **Configure authentication:**
+   - Settings tab opens automatically on first launch
+   - Paste your **API Key** (get from [app.roboflow.com/settings/api](https://app.roboflow.com/settings/api))
+   - Enter your **Project ID** (e.g., `my-workspace/my-project` or just `my-project`)
+   
+5. **Download a Core ML model and start scanning:**
+   - Use Roboflow API to download your model as Core ML (.mlpackage)
+   - Load it in the app
+   - Start scanning for false positives
 
 ---
 
-## How OAuth Works (Custom URL Scheme Relay)
+## OAuth Implementation (Disabled)
 
-Scout uses a **custom URL scheme relay** for OAuth, which works with **free Apple Personal Teams**:
+Scout has a complete OAuth 2.1 + PKCE implementation but it's **disabled by default** because Roboflow requires a client secret.
+
+### Why OAuth is Disabled
+
+Token exchange returns `{"error":"invalid_client"}` because:
+- Roboflow OAuth apps only offer `client_secret_post` or `client_secret_basic` authentication
+- No public client / PKCE-only option available (as of October 2026)
+- We won't embed a client secret in the binary or run a backend server
+- API key authentication works well for Scout's use case
+
+### How the OAuth Implementation Works
+
+The OAuth flow is fully implemented via **custom URL scheme relay**, which works with **free Apple Personal Teams**:
 
 ### OAuth Flow
 
@@ -115,6 +124,16 @@ The relay page at `https://pmn4.github.io/false-positive-scout/oauth/callback` i
   window.location = 'scout://oauth/callback?' + params.toString();
 </script>
 ```
+
+### Re-enabling OAuth (If Roboflow Adds Public Client Support)
+
+To re-enable the OAuth flow:
+
+1. Open `Scout/OAuthConfig.swift`
+2. Change `static let isEnabled = false` to `static let isEnabled = true`
+3. Settings UI will show "Sign in with Roboflow" button
+4. OAuth flow will work via the `scout://` custom URL scheme relay
+5. **Note:** Will still fail with "invalid_client" until Roboflow adds public client support
 
 ### Forking Scout with Your Own Relay
 

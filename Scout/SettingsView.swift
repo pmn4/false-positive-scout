@@ -137,12 +137,12 @@ struct SettingsView: View {
                             .autocorrectionDisabled()
                             .disabled(oauthManager.isAuthenticated)
                         
-                        if oauthManager.isAuthenticated {
+                        if OAuthConfig.isEnabled && oauthManager.isAuthenticated {
                             Text("⚠️ API key ignored while signed in with OAuth")
                                 .font(.caption)
                                 .foregroundColor(.orange)
                         } else {
-                            Text("Alternative to OAuth. Get from Roboflow Settings > API")
+                            Text(OAuthConfig.isEnabled ? "Alternative to OAuth. Get from Roboflow Settings > API" : "Get your API key from app.roboflow.com/settings/api")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -157,15 +157,15 @@ struct SettingsView: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         
-                        Text("Required for upload when using API key (optional for OAuth)")
+                        Text(OAuthConfig.isEnabled ? "Required for upload when using API key (optional for OAuth)" : "Your workspace/project slug (e.g., my-workspace/my-project)")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                     .padding(.vertical, 4)
                 } header: {
-                    Text("Use an API key instead")
+                    Text(OAuthConfig.isEnabled ? "Use an API key instead" : "Authentication")
                 } footer: {
-                    Text("Alternative to OAuth. Get API key from app.roboflow.com/settings/api. OAuth takes priority when signed in.")
+                    Text(OAuthConfig.isEnabled ? "Alternative to OAuth. Get API key from app.roboflow.com/settings/api. OAuth takes priority when signed in." : "Required to upload, download models, and use Scout. Get your API key and project ID from app.roboflow.com/settings/api")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
