@@ -409,7 +409,10 @@ struct VersionStatusView: View {
                     progress: modelManager.downloadProgress
                 )
             } else if let error = lastError {
-                ErrorView(error: error, onRetry: onDownload)
+                ErrorView(error: error, onRetry: {
+                    lastError = nil
+                    onDownload()
+                })
             } else if isCurrentModel {
                 ReadyView()
             } else if isCached {
@@ -419,13 +422,6 @@ struct VersionStatusView: View {
             }
         }
         .padding(.vertical, 4)
-        .onChange(of: modelManager.isDownloading) { downloading in
-            if !downloading && modelManager.downloadStage.isEmpty && !isCurrentModel {
-                if !isCached {
-                    lastError = "Download failed. Please try again."
-                }
-            }
-        }
     }
 }
 

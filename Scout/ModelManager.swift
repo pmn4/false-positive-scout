@@ -217,13 +217,28 @@ class ModelManager: ObservableObject {
         
         // Download Core ML model from Roboflow (roboflow-swift pattern)
         var downloadURL = URL(string: "https://api.roboflow.com/coreml/\(projectSlug)/\(versionNum)")!
-        var request = URLRequest(url: downloadURL)
+        var components = URLComponents(url: downloadURL, resolvingAgainstBaseURL: false)!
+        
+        var queryItems: [URLQueryItem] = []
+        
+        #if os(iOS)
+        if let deviceID = UIDevice.current.identifierForVendor?.uuidString {
+            queryItems.append(URLQueryItem(name: "device", value: deviceID))
+        }
+        #endif
+        
+        queryItems.append(URLQueryItem(name: "nocache", value: "true"))
         
         if let key = apiKey, !key.isEmpty {
-            var components = URLComponents(url: downloadURL, resolvingAgainstBaseURL: false)!
-            components.queryItems = [URLQueryItem(name: "api_key", value: key)]
-            downloadURL = components.url!
-            request.url = downloadURL
+            queryItems.append(URLQueryItem(name: "api_key", value: key))
+        }
+        
+        components.queryItems = queryItems
+        downloadURL = components.url!
+        
+        var request = URLRequest(url: downloadURL)
+        
+        if !(apiKey?.isEmpty ?? true) {
         } else if OAuthManager.shared.isAuthenticated {
             let accessToken = try await OAuthManager.shared.getAccessToken()
             request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
