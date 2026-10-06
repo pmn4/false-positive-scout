@@ -3,6 +3,7 @@ import UIKit
 import CoreML
 import Vision
 import Compression
+import ZIPFoundation
 
 // "I know I can, be what I wanna be" ~Nas (probably)
 // On-device Core ML model management and caching
@@ -285,7 +286,7 @@ class ModelManager: ObservableObject {
         
         await MainActor.run {
             downloadStage = "Download complete"
-            downloadProgress = 0.7
+            downloadProgress = 0.6
         }
         
         // Check HTTP status before treating response as a model
@@ -343,10 +344,10 @@ class ModelManager: ObservableObject {
             try fileManager.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         }
         
-        let compiledURL = try await MLModel.compileModel(at: tempWithExtension)
+        let compiledURL = try await MLModel.compileModel(at: modelURL)
         
         await MainActor.run {
-            downloadStage = "Finalizing..."
+            downloadStage = "Loading..."
             downloadProgress = 0.9
         }
         
@@ -363,6 +364,66 @@ class ModelManager: ObservableObject {
             downloadStage = "Ready"
             downloadProgress = 1.0
         }
+    }
+    
+    private func extractModelFromZip(_ zipURL: URL) async throws -> URL {
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        
+        defer {
+            try? fileManager.removeItem(at: tempDir)
+        }
+        
+        try fileManager.unzipItem(at: zipURL, to: tempDir)
+        
+        let extractedModel = try findModelInDirectory(tempDir)
+        
+        let finalURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent(extractedModel.lastPathComponent)
+        try fileManager.createDirectory(at: finalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fileManager.moveItem(at: extractedModel, to: finalURL)
+        
+        return finalURL
+    }
+    
+    private func findModelInDirectory(_ directory: URL) throws -> URL {
+        var foundModels: [URL] = []
+        
+        if let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for case let fileURL as URL in enumerator {
+                let filename = fileURL.lastPathComponent
+                
+                if filename.hasPrefix("__MACOSX") || filename.hasPrefix(".") {
+                    continue
+                }
+                
+                let pathExtension = fileURL.pathExtension.lowercased()
+                var isDirectory: ObjCBool = false
+                fileManager.fileExists(atPath: fileURL.path, isDirectory: &isDirectory)
+                
+                if pathExtension == "mlpackage" && isDirectory.boolValue {
+                    foundModels.append(fileURL)
+                } else if pathExtension == "mlmodelc" && isDirectory.boolValue {
+                    foundModels.append(fileURL)
+                } else if pathExtension == "mlmodel" && !isDirectory.boolValue {
+                    foundModels.append(fileURL)
+                }
+            }
+        }
+        
+        guard let model = foundModels.first else {
+            let topLevelContents = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+                .map { $0.lastPathComponent }
+                .filter { !$0.hasPrefix("__MACOSX") && !$0.hasPrefix(".") }
+                .joined(separator: ", ")
+            throw ModelError.noModelInArchive("No .mlmodel, .mlpackage, or .mlmodelc found. Contents: \(topLevelContents)")
+        }
+        
+        return model
     }
     
     private func loadCachedModel(from url: URL, workspace: String, project: String, version: String) async throws {
@@ -603,7 +664,7 @@ enum ModelError: LocalizedError {
     case noDownloadLink
     case downloadFailed(String)
     case mlpackageNotFound
-    case zipNotSupported
+    case noModelInArchive(String)
     case noModelLoaded
     case imageConversionFailed
     case unsupportedModelType
@@ -625,8 +686,8 @@ enum ModelError: LocalizedError {
             return "Download failed: \(message)"
         case .mlpackageNotFound:
             return ".mlpackage not found in downloaded archive"
-        case .zipNotSupported:
-            return "This model is packaged as a ZIP file. Scout cannot unzip on iOS. Please re-export the model from Roboflow as an uncompressed Core ML model, or use a different model version."
+        case .noModelInArchive(let contents):
+            return "No Core ML model found in archive. \(contents)"
         case .noModelLoaded:
             return "No model loaded. Please download a model first."
         case .imageConversionFailed:

@@ -21,6 +21,7 @@
 		A10000019 /* ThresholdManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000001A /* ThresholdManager.swift */; };
 		A1000001B /* ThresholdControlSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000001C /* ThresholdControlSheet.swift */; };
 		A1000001D /* ModelPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000001E /* ModelPickerSheet.swift */; };
+		A1000001F /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = A10000020 /* ZIPFoundation */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -48,6 +49,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1000001F /* ZIPFoundation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -109,6 +111,9 @@
 			dependencies = (
 			);
 			name = Scout;
+			packageProductDependencies = (
+				A10000020 /* ZIPFoundation */,
+			);
 			productName = Scout;
 			productReference = A0FFFFFFF /* Scout.app */;
 			productType = "com.apple.product-type.application";
@@ -132,6 +137,9 @@
 				Base,
 			);
 			mainGroup = A0FFFFFF8;
+			packageReferences = (
+				A10000021 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+			);
 			productRefGroup = B00000000000000000000002 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -360,6 +368,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A10000021 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/weichsel/ZIPFoundation";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A10000020 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000021 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A0FFFFFF9 /* Project object */;
 }
