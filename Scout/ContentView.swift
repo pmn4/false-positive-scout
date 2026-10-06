@@ -15,7 +15,7 @@ struct ContentView: View {
         TabView(selection: $selectedTab) {
             CameraView()
                 .tabItem {
-                    Label("Scan", systemImage: "camera.fill")
+                    Label("Scout", systemImage: "camera.fill")
                 }
                 .tag(0)
             

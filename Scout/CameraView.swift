@@ -121,7 +121,7 @@ struct CameraView: View {
                             Button(action: {
                                 stopScanning()
                             }) {
-                                Text("Stop Scanning")
+                                Text("Stop Scouting")
                                     .font(.subheadline)
                                     .foregroundColor(.white)
                                     .padding(.horizontal, 20)
