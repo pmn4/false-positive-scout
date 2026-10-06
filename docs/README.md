@@ -6,7 +6,7 @@ Scout uses a **custom URL scheme relay** for OAuth, which works with **free Appl
 
 ### How It Works
 
-1. App starts OAuth with redirect URI: `https://pmnewell.com/false-positive-scout/oauth/callback`
+1. App starts OAuth with redirect URI: `https://pmn4.github.io/false-positive-scout/oauth/callback`
 2. User signs in to Roboflow, which redirects to the https:// URL
 3. A static relay page at that URL **immediately forwards** to: `scout://oauth/callback?code=...&state=...` (preserving all query parameters)
 4. iOS opens Scout via the `scout://` custom URL scheme

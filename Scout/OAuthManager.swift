@@ -16,13 +16,12 @@ class OAuthManager: NSObject, ObservableObject {
     private let tokenEndpoint = "https://app.roboflow.com/oauth/token"
     private let validateEndpoint = "https://app.roboflow.com/oauth/validate"
     
-    // Client ID placeholder - Patrick will paste from Roboflow OAuth app
+    // Client ID from Roboflow OAuth app (rfc_...)
     private let clientId = "7b53bbdb-8056-43f1-b2be-77a6ddfbd547"
     
-    // Redirect URI (https:// for Universal Links / Associated Domains)
-    // Roboflow requires https:// (or http:// for localhost only)
-    // Patrick can use this GitHub Pages URL or register his own domain
-    private let redirectURI = "https://pmnewell.com/false-positive-scout/oauth/callback"
+    // Redirect URI: https:// relay page that forwards to scout:// custom URL scheme
+    // The relay page at this URL immediately redirects to scout://oauth/callback + query params
+    private let redirectURI = "https://pmn4.github.io/false-positive-scout/oauth/callback"
     
     // Required OAuth scopes for Scout's functionality
     private let scopes = [

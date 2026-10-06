@@ -94,7 +94,7 @@ Scout uses a **custom URL scheme relay** for OAuth, which works with **free Appl
 1. User taps "Sign in with Roboflow"
 2. App opens Roboflow authorization page in Safari
 3. User logs in and approves access
-4. Roboflow redirects to: `https://pmnewell.com/false-positive-scout/oauth/callback?code=...&state=...`
+4. Roboflow redirects to: `https://pmn4.github.io/false-positive-scout/oauth/callback?code=...&state=...`
 5. **Relay page** (static HTML at that URL) immediately forwards to: `scout://oauth/callback?code=...&state=...`
 6. iOS opens Scout app via the `scout://` custom URL scheme
 7. App validates state (PKCE) and exchanges code for tokens
@@ -103,7 +103,7 @@ Scout uses a **custom URL scheme relay** for OAuth, which works with **free Appl
 
 ### The Relay Page
 
-The relay page at `https://pmnewell.com/false-positive-scout/oauth/callback` is a static HTML page that:
+The relay page at `https://pmn4.github.io/false-positive-scout/oauth/callback` is a static HTML page that:
 - Reads all query parameters from the URL (`code`, `state`, `error`, `error_description`)
 - Immediately redirects to `scout://oauth/callback` with the same parameters
 - Is maintained in the `pmn4/pmn4.github.io` repository (Patrick's site repository)
@@ -143,7 +143,7 @@ If you fork Scout and want your own OAuth setup:
    - Fill in the following:
      - **Name**: `Scout` (or your preferred name)
      - **Homepage URL**: Your app homepage (e.g., `https://github.com/pmn4/false-positive-scout`)
-     - **Redirect URI**: `https://pmnewell.com/false-positive-scout/oauth/callback`
+     - **Redirect URI**: `https://pmn4.github.io/false-positive-scout/oauth/callback`
        - (or your custom domain if using Option B above)
        - Must exactly match the redirect URI in `OAuthManager.swift`
      - **Token endpoint authentication**: `client_secret_post` (default)
@@ -347,7 +347,7 @@ After configuring your OAuth Client ID:
 - **Sign-in opens but doesn't return to Scout:**
   - **Check Associated Domains:**
     - In Xcode, go to Scout target > Signing & Capabilities > Associated Domains
-    - Verify domain is listed (e.g., `applinks:pmnewell.com`)
+    - Verify domain is listed (e.g., `applinks:pmn4.github.io`)
     - Do NOT include `https://` or paths in Associated Domains
   - **Verify apple-app-site-association file:**
     - Visit `https://yourdomain.com/.well-known/apple-app-site-association`
@@ -398,11 +398,7 @@ After configuring your OAuth Client ID:
 
 ## apple-app-site-association File
 
-The default OAuth redirect URI (`https://pmnewell.com/false-positive-scout/oauth/callback`) uses the pmnewell.com domain. The `apple-app-site-association` file is hosted at:
-
-**Live file:** `https://pmnewell.com/.well-known/apple-app-site-association`
-
-This file is maintained in the `pmn4/pmn4.github.io` repository (Patrick's site repository), **not** in this repository.
+**Note:** The current OAuth setup uses a **custom URL scheme relay** (`scout://`) and does **NOT** require an `apple-app-site-association` file. The AASA template in `docs/` is kept only for reference if upgrading to Universal Links with a paid Apple Developer account.
 
 **Reference template:** See `docs/apple-app-site-association` in this repository for a reference template showing the required format.
 
@@ -429,7 +425,7 @@ This file is maintained in the `pmn4/pmn4.github.io` repository (Patrick's site 
 1. Open `Scout.xcodeproj` in Xcode
 2. Select **Any iOS Device** as the build target
 3. Set your development team in Signing & Capabilities
-4. Add **Associated Domains** capability with your domain (e.g., `applinks:pmnewell.com`)
+4. Add **Associated Domains** capability with your domain (e.g., `applinks:pmn4.github.io`)
 5. Verify bundle ID is `com.scout.app`
 6. Archive the app: **Product > Archive**
 7. Distribute via App Store Connect or TestFlight
