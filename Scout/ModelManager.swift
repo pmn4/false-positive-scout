@@ -649,7 +649,7 @@ class ModelManager: ObservableObject {
         for (metadataKey, metadataValue) in description.metadata {
             if let stringValue = metadataValue as? String {
                 for key in ["classes", "names", "class_labels"] {
-                    if metadataKey.description.lowercased().contains(key) {
+                    if metadataKey.rawValue.lowercased().contains(key) {
                         if let parsed = parseClassLabelsFromString(stringValue) {
                             return parsed
                         }
@@ -658,7 +658,7 @@ class ModelManager: ObservableObject {
             }
         }
         
-        if let userDefined = description.metadata[MLModelMetadataKey("com.apple.coreml.model.user_defined")] as? [String: String] {
+        if let userDefined = description.metadata[MLModelMetadataKey(rawValue: "com.apple.coreml.model.user_defined")] as? [String: String] {
             for key in ["classes", "names", "class_labels"] {
                 if let value = userDefined[key] {
                     if let parsed = parseClassLabelsFromString(value) {
