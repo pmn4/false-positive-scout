@@ -22,7 +22,7 @@ class OAuthManager: NSObject, ObservableObject {
     // Redirect URI (https:// for Universal Links / Associated Domains)
     // Roboflow requires https:// (or http:// for localhost only)
     // Patrick can use this GitHub Pages URL or register his own domain
-    private let redirectURI = "https://pmn4.github.io/false-positive-scout/oauth/callback"
+    private let redirectURI = "https://pmnewell.com/false-positive-scout/oauth/callback"
     
     // Required OAuth scopes for Scout's functionality
     private let scopes = [

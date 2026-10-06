@@ -78,9 +78,10 @@ Choose the path that fits your workflow. OAuth is preferred for App Store distri
 
 Scout uses **https://** redirect URIs via iOS Universal Links (required by Roboflow OAuth).
 
-**Option A: Use the provided GitHub Pages URL (recommended for testing):**
-- Redirect URI: `https://pmn4.github.io/false-positive-scout/oauth/callback`
-- The `apple-app-site-association` file is already hosted in this repository
+**Option A: Use the provided pmnewell.com URL (recommended for testing):**
+- Redirect URI: `https://pmnewell.com/false-positive-scout/oauth/callback`
+- The `apple-app-site-association` file is hosted at `https://pmnewell.com/.well-known/apple-app-site-association` (maintained in pmn4/pmn4.github.io repository)
+- See `docs/apple-app-site-association` in this repository for a reference template
 - Skip to step 2 (no hosting setup needed)
 
 **Option B: Use your own domain (for production):**
@@ -109,7 +110,7 @@ Scout uses **https://** redirect URIs via iOS Universal Links (required by Robof
    - Go to **Signing & Capabilities** tab
    - Click **+ Capability**
    - Add **Associated Domains**
-   - Add domain: `applinks:pmn4.github.io` (or `applinks:yourdomain.com` if using your own)
+   - Add domain: `applinks:pmnewell.com` (or `applinks:yourdomain.com` if using your own)
    - Do NOT include `https://` or paths in the Associated Domains entry
 
 #### 3. Register a Roboflow OAuth App
@@ -123,7 +124,7 @@ Scout uses **https://** redirect URIs via iOS Universal Links (required by Robof
    - Fill in the following:
      - **Name**: `Scout` (or your preferred name)
      - **Homepage URL**: Your app homepage (e.g., `https://github.com/pmn4/false-positive-scout`)
-     - **Redirect URI**: `https://pmn4.github.io/false-positive-scout/oauth/callback`
+     - **Redirect URI**: `https://pmnewell.com/false-positive-scout/oauth/callback`
        - (or your custom domain if using Option B above)
        - Must exactly match the redirect URI in `OAuthManager.swift`
      - **Token endpoint authentication**: `client_secret_post` (default)
@@ -359,7 +360,7 @@ After configuring your OAuth Client ID:
 - **Sign-in opens but doesn't return to Scout:**
   - **Check Associated Domains:**
     - In Xcode, go to Scout target > Signing & Capabilities > Associated Domains
-    - Verify domain is listed (e.g., `applinks:pmn4.github.io`)
+    - Verify domain is listed (e.g., `applinks:pmnewell.com`)
     - Do NOT include `https://` or paths in Associated Domains
   - **Verify apple-app-site-association file:**
     - Visit `https://yourdomain.com/.well-known/apple-app-site-association`
@@ -408,34 +409,40 @@ After configuring your OAuth Client ID:
   - Check the confidence threshold (Settings > Detection Settings)
   - Ensure the model was trained on similar object classes and conditions
 
-## Hosting apple-app-site-association on GitHub Pages
+## apple-app-site-association File
 
-If using the default `pmn4.github.io` redirect URI:
+The default OAuth redirect URI (`https://pmnewell.com/false-positive-scout/oauth/callback`) uses the pmnewell.com domain. The `apple-app-site-association` file is hosted at:
 
-1. **Update the TEAM_ID in the file:**
-   - Open `apple-app-site-association` in this repository
-   - Replace `TEAM_ID` with your Apple Developer Team ID
+**Live file:** `https://pmnewell.com/.well-known/apple-app-site-association`
+
+This file is maintained in the `pmn4/pmn4.github.io` repository (Patrick's site repository), **not** in this repository.
+
+**Reference template:** See `docs/apple-app-site-association` in this repository for a reference template showing the required format.
+
+### If using your own custom domain:
+
+1. **Update the TEAM_ID in the template:**
+   - Copy `docs/apple-app-site-association`
+   - Replace `<TEAMID>` with your Apple Developer Team ID
    - Find your Team ID in Xcode: Scout target > Signing & Capabilities > Team
 
-2. **Deploy to GitHub Pages:**
-   - The file is already in the repository root
-   - Enable GitHub Pages: Repo Settings > Pages > Deploy from branch `main`
-   - GitHub Pages automatically serves files at the root
-   - Verify it's accessible: `https://pmn4.github.io/false-positive-scout/apple-app-site-association`
+2. **Host at your domain:**
+   - Place the file at `https://yourdomain.com/.well-known/apple-app-site-association`
+   - Ensure it's served over HTTPS with a valid certificate
+   - Content-Type should be `application/json` or `application/pkcs7-mime`
+   - Verify it's accessible before testing OAuth
 
-3. **Alternative: Use .well-known directory (preferred):**
-   - Create `.well-known/` directory in your repository
-   - Move `apple-app-site-association` into `.well-known/`
-   - Verify: `https://pmn4.github.io/false-positive-scout/.well-known/apple-app-site-association`
-
-**Note:** GitHub Pages serves JSON files correctly. If using another host, ensure the Content-Type is `application/json` or `application/pkcs7-mime`.
+3. **Update the redirect URI:**
+   - Change `redirectURI` in `Scout/OAuthManager.swift`
+   - Update the Associated Domains in Xcode: `applinks:yourdomain.com`
+   - Register the new redirect URI in your Roboflow OAuth app settings
 
 ## Building for Release
 
 1. Open `Scout.xcodeproj` in Xcode
 2. Select **Any iOS Device** as the build target
 3. Set your development team in Signing & Capabilities
-4. Add **Associated Domains** capability with your domain (e.g., `applinks:pmn4.github.io`)
+4. Add **Associated Domains** capability with your domain (e.g., `applinks:pmnewell.com`)
 5. Verify bundle ID is `com.scout.app`
 6. Archive the app: **Product > Archive**
 7. Distribute via App Store Connect or TestFlight

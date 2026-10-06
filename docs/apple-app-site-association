@@ -1,0 +1,14 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "<TEAMID>.com.scout.app",
+        "paths": [
+          "/false-positive-scout/oauth/callback",
+          "/false-positive-scout/oauth/callback/*"
+        ]
+      }
+    ]
+  }
+}
