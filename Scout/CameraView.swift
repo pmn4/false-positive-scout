@@ -454,6 +454,10 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             return
         }
         
+        if connection.isVideoOrientationSupported {
+            connection.videoOrientation = .portrait
+        }
+        
         let ciImage = CIImage(cvPixelBuffer: imageBuffer)
         let context = CIContext()
         
@@ -461,7 +465,23 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             return
         }
         
-        let uiImage = UIImage(cgImage: cgImage)
+        var orientation: UIImage.Orientation = .up
+        if let conn = output.connection(with: .video), conn.isVideoOrientationSupported {
+            switch conn.videoOrientation {
+            case .portrait:
+                orientation = .right
+            case .portraitUpsideDown:
+                orientation = .left
+            case .landscapeRight:
+                orientation = .up
+            case .landscapeLeft:
+                orientation = .down
+            @unknown default:
+                orientation = .up
+            }
+        }
+        
+        let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: orientation)
         latestFrame = uiImage
         
         DispatchQueue.main.async { [weak self] in
