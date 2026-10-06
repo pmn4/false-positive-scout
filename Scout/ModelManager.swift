@@ -43,7 +43,9 @@ class ModelManager: ObservableObject {
     // MARK: - Model Discovery
     
     func listModelVersions(workspace: String, project: String, apiKey: String? = nil) async throws -> [ModelVersion] {
-        var url = URL(string: "https://api.roboflow.com/\(workspace)/\(project)")!
+        let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
+        
+        var url = URL(string: "https://api.roboflow.com/\(workspace)/\(projectSlug)")!
         var request = URLRequest(url: url)
         
         if let key = apiKey, !key.isEmpty {
