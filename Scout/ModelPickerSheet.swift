@@ -177,6 +177,12 @@ struct ModelPickerSheet: View {
             return
         }
         
+        let version = versions.first { $0.id == modelVersion }
+        if let status = version?.availabilityStatus {
+            errorMessage = status
+            return
+        }
+        
         modelWorkspace = workspace
         modelProject = project
         
@@ -194,7 +200,12 @@ struct ModelPickerSheet: View {
                 }
             } catch {
                 await MainActor.run {
-                    errorMessage = error.localizedDescription
+                    let errorText = error.localizedDescription
+                    if errorText.contains("404") || errorText.contains("not found") {
+                        errorMessage = "This model version doesn't have a Core ML export available. Try a different version or re-export from Roboflow."
+                    } else {
+                        errorMessage = errorText
+                    }
                 }
             }
         }
@@ -317,13 +328,26 @@ struct VersionSection: View {
                 Picker("Version", selection: $selectedVersion) {
                     Text("Select version").tag("")
                     ForEach(versions) { version in
-                        HStack {
-                            Text(version.displayName)
-                            Spacer()
-                            if isVersionCached(version) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                                    .font(.caption)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(version.displayName)
+                                    .foregroundColor(version.trained ? .primary : .secondary)
+                                Spacer()
+                                if isVersionCached(version) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green)
+                                        .font(.caption)
+                                }
+                            }
+                            if let detail = version.detailText {
+                                Text(detail)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            if let status = version.availabilityStatus {
+                                Text(status)
+                                    .font(.caption2)
+                                    .foregroundColor(.orange)
                             }
                         }
                         .tag(version.id)

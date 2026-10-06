@@ -19,6 +19,7 @@ struct CameraView: View {
     @State private var captureCount = 0
     @State private var showThresholdSheet = false
     @State private var showModelPicker = false
+    @State private var hasShownModelPickerOnce = false
     
     private let frameCheckInterval: TimeInterval = 0.5
     private let similarityThreshold: Double = 0.85
@@ -28,6 +29,10 @@ struct CameraView: View {
             ZStack {
                 CameraPreview(session: cameraManager.session)
                     .edgesIgnoringSafeArea(.all)
+                
+                if modelManager.currentModel == nil {
+                    NoModelOverlay(showModelPicker: $showModelPicker)
+                }
                 
                 VStack {
                     HStack {
@@ -165,6 +170,13 @@ struct CameraView: View {
             }
             .onAppear {
                 cameraManager.checkPermissions()
+                
+                if modelManager.currentModel == nil && !hasShownModelPickerOnce {
+                    hasShownModelPickerOnce = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        showModelPicker = true
+                    }
+                }
             }
             .sheet(isPresented: $showThresholdSheet) {
                 ThresholdControlSheet(
@@ -504,6 +516,53 @@ struct CameraPreview: UIViewRepresentable {
     
     class Coordinator {
         var previewLayer: AVCaptureVideoPreviewLayer?
+    }
+}
+
+struct NoModelOverlay: View {
+    @Binding var showModelPicker: Bool
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            
+            VStack(spacing: 16) {
+                Image(systemName: "cube.box")
+                    .font(.system(size: 60))
+                    .foregroundColor(.blue)
+                
+                Text("No Model Loaded")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                
+                Text("Choose a Core ML model to start detecting objects")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                
+                Button(action: {
+                    showModelPicker = true
+                }) {
+                    HStack {
+                        Image(systemName: "arrow.down.circle.fill")
+                        Text("Choose Model")
+                    }
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .background(Color.blue)
+                    .cornerRadius(12)
+                }
+            }
+            .padding(32)
+            .background(.ultraThinMaterial)
+            .cornerRadius(20)
+            .shadow(radius: 10)
+            
+            Spacer()
+        }
+        .padding()
     }
 }
 

@@ -11,9 +11,44 @@ struct ModelVersion: Codable, Identifiable {
     let id: String
     let name: String
     let created: String?
+    let modelType: String?
+    let map: Double?
+    let trained: Bool
     
     var displayName: String {
-        "Version \(id)"
+        if let type = modelType {
+            return "v\(id) (\(type))"
+        } else {
+            return "v\(id)"
+        }
+    }
+    
+    var detailText: String? {
+        var parts: [String] = []
+        if let map = map {
+            parts.append("mAP: \(Int(map * 100))%")
+        }
+        if let created = created, let date = parseDate(created) {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            parts.append(formatter.string(from: date))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " • ")
+    }
+    
+    var availabilityStatus: String? {
+        if !trained {
+            return "Not trained"
+        }
+        return nil
+    }
+    
+    private func parseDate(_ dateString: String) -> Date? {
+        if let timestamp = Double(dateString) {
+            return Date(timeIntervalSince1970: timestamp)
+        }
+        let formatter = ISO8601DateFormatter()
+        return formatter.date(from: dateString)
     }
 }
 
@@ -83,15 +118,47 @@ class ModelManager: ObservableObject {
             
             if let versions = versionsArray {
                 let models = versions.compactMap { versionDict -> ModelVersion? in
-                    // Version ID from API (just the number)
-                    guard let id = versionDict["id"] as? String else { return nil }
-                    // Skip versions without a model key (untrained)
-                    guard versionDict["model"] != nil else { return nil }
-                    let name = versionDict["name"] as? String ?? "Version \(id)"
-                    // created may be numeric or string
+                    guard let idRaw = versionDict["id"] as? String else { return nil }
+                    
+                    let versionNumber = idRaw.split(separator: "/").last.map(String.init) ?? idRaw
+                    
+                    let name = versionDict["name"] as? String ?? "Version \(versionNumber)"
                     let created = (versionDict["created"] as? String) ?? (versionDict["created"] as? NSNumber).map { "\($0)" }
-                    // Store just the version number as ID
-                    return ModelVersion(id: id, name: name, created: created)
+                    
+                    let hasTrained = versionDict["model"] != nil
+                    
+                    let modelType: String?
+                    if let modelDict = versionDict["model"] as? [String: Any],
+                       let type = modelDict["type"] as? String {
+                        modelType = type
+                    } else {
+                        modelType = nil
+                    }
+                    
+                    let map: Double?
+                    if let modelDict = versionDict["model"] as? [String: Any],
+                       let mapValue = modelDict["map"] as? Double {
+                        map = mapValue
+                    } else if let mapValue = versionDict["map"] as? Double {
+                        map = mapValue
+                    } else {
+                        map = nil
+                    }
+                    
+                    return ModelVersion(
+                        id: versionNumber,
+                        name: name,
+                        created: created,
+                        modelType: modelType,
+                        map: map,
+                        trained: hasTrained
+                    )
+                }
+                .sorted { a, b in
+                    guard let aNum = Int(a.id), let bNum = Int(b.id) else {
+                        return a.id > b.id
+                    }
+                    return aNum > bNum
                 }
                 
                 DispatchQueue.main.async {
