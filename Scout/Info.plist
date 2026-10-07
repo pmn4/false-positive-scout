@@ -4,6 +4,19 @@
 <dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Scout needs camera access to capture frames for your object detection model.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.pmnewell.falsepositivescout.oauth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>scout</string>
+			</array>
+		</dict>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

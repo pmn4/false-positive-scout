@@ -4,16 +4,6 @@ import UIKit
 // "Life's a bitch, then you die" - Nas (probably)
 // Core data models for Scout
 
-struct RoboflowConfig: Codable {
-    var modelId: String
-    var apiKey: String
-    var confidenceThreshold: Int
-    
-    static var `default`: RoboflowConfig {
-        RoboflowConfig(modelId: "", apiKey: "", confidenceThreshold: 40)
-    }
-}
-
 struct Detection: Codable, Identifiable {
     let id = UUID()
     let x: Double
@@ -29,26 +19,38 @@ struct Detection: Codable, Identifiable {
     }
 }
 
-struct InferenceResponse: Codable {
-    let predictions: [Detection]
-    let time: Double
-}
-
 struct CapturedFrame: Identifiable, Codable {
     let id: UUID
     let timestamp: Date
     let detections: [Detection]
     var imageData: Data?
     var kept: Bool
+    var reviewed: Bool
     var uploadedImageId: String?
     
-    init(id: UUID = UUID(), timestamp: Date = Date(), detections: [Detection], imageData: Data?, kept: Bool = true, uploadedImageId: String? = nil) {
+    init(id: UUID = UUID(), timestamp: Date = Date(), detections: [Detection], imageData: Data?, kept: Bool = true, reviewed: Bool = false, uploadedImageId: String? = nil) {
         self.id = id
         self.timestamp = timestamp
         self.detections = detections
         self.imageData = imageData
         self.kept = kept
+        self.reviewed = reviewed
         self.uploadedImageId = uploadedImageId
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        detections = try container.decode([Detection].self, forKey: .detections)
+        imageData = try container.decodeIfPresent(Data.self, forKey: .imageData)
+        kept = try container.decode(Bool.self, forKey: .kept)
+        reviewed = try container.decodeIfPresent(Bool.self, forKey: .reviewed) ?? false
+        uploadedImageId = try container.decodeIfPresent(String.self, forKey: .uploadedImageId)
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case id, timestamp, detections, imageData, kept, reviewed, uploadedImageId
     }
 }
 
@@ -110,7 +112,23 @@ class FrameStorage: ObservableObject {
     }
     
     func exportKeptFrames() -> [CapturedFrame] {
-        return frames.filter { $0.kept }
+        return frames.filter { $0.reviewed && $0.kept }
+    }
+    
+    func markReviewed(_ frame: CapturedFrame, kept: Bool) {
+        if let index = frames.firstIndex(where: { $0.id == frame.id }) {
+            frames[index].reviewed = true
+            frames[index].kept = kept
+            saveFrames()
+        }
+    }
+    
+    func undoReview(_ frame: CapturedFrame, previousKept: Bool) {
+        if let index = frames.firstIndex(where: { $0.id == frame.id }) {
+            frames[index].reviewed = false
+            frames[index].kept = previousKept
+            saveFrames()
+        }
     }
     
     private func saveFrames() {
@@ -122,6 +140,7 @@ class FrameStorage: ObservableObject {
                 detections: frame.detections,
                 imageData: nil,
                 kept: frame.kept,
+                reviewed: frame.reviewed,
                 uploadedImageId: frame.uploadedImageId
             )
         }
@@ -157,6 +176,7 @@ class FrameStorage: ObservableObject {
                 detections: frame.detections,
                 imageData: imageData,
                 kept: frame.kept,
+                reviewed: frame.reviewed,
                 uploadedImageId: frame.uploadedImageId
             )
         }
