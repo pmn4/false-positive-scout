@@ -913,6 +913,6 @@ extension Color {
 }
 
 #Preview {
-    CameraView()
+    CameraView(isActive: .constant(true))
         .environmentObject(FrameStorage())
 }

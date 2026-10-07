@@ -286,79 +286,70 @@ struct SwipeCard: View {
     
     var body: some View {
         GeometryReader { geometry in
-            if let imageData = frame.imageData,
-               let uiImage = UIImage(data: imageData) {
-                let imageAspect = uiImage.size.width / uiImage.size.height
-                let availableWidth = geometry.size.width * 0.85
-                let availableHeight = geometry.size.height
-                
-                let cardWidth: CGFloat
-                let cardHeight: CGFloat
-                
-                if imageAspect > availableWidth / availableHeight {
-                    cardWidth = availableWidth
-                    cardHeight = availableWidth / imageAspect
-                } else {
-                    cardHeight = availableHeight
-                    cardWidth = availableHeight * imageAspect
-                }
-                
-                ZStack {
+            Group {
+                if let imageData = frame.imageData,
+                   let uiImage = UIImage(data: imageData) {
+                    let size = cardSize(
+                        for: uiImage.size,
+                        in: CGSize(width: geometry.size.width * 0.85, height: geometry.size.height)
+                    )
+                    
                     ZStack {
-                        Image(uiImage: uiImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: cardWidth, height: cardHeight)
-                        
-                        // Raw camera frame - boxes overlaid, NEVER burned in
-                        DetectionBoxesView(
-                            detections: frame.detections,
-                            imageSize: uiImage.size,
-                            classColors: classColors,
-                            scalingMode: .aspectFit,
-                            opacity: isLongPressing ? 0.1 : 1.0
-                        )
-                        .frame(width: cardWidth, height: cardHeight)
-                        
-                        if index == 0 {
-                            if offset.width > 0 {
-                                Text("KEEP")
-                                    .font(.system(size: 60, weight: .bold))
-                                    .foregroundColor(.green)
-                                    .rotationEffect(.degrees(-20))
-                                    .opacity(stampOpacity)
-                            } else if offset.width < 0 {
-                                Text("REJECT")
-                                    .font(.system(size: 60, weight: .bold))
-                                    .foregroundColor(.red)
-                                    .rotationEffect(.degrees(20))
-                                    .opacity(stampOpacity)
+                        ZStack {
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: size.width, height: size.height)
+                            
+                            // Raw camera frame - boxes overlaid, NEVER burned in
+                            DetectionBoxesView(
+                                detections: frame.detections,
+                                imageSize: uiImage.size,
+                                classColors: classColors,
+                                scalingMode: .aspectFit,
+                                opacity: isLongPressing ? 0.1 : 1.0
+                            )
+                            .frame(width: size.width, height: size.height)
+                            
+                            if index == 0 {
+                                if offset.width > 0 {
+                                    Text("KEEP")
+                                        .font(.system(size: 60, weight: .bold))
+                                        .foregroundColor(.green)
+                                        .rotationEffect(.degrees(-20))
+                                        .opacity(stampOpacity)
+                                } else if offset.width < 0 {
+                                    Text("REJECT")
+                                        .font(.system(size: 60, weight: .bold))
+                                        .foregroundColor(.red)
+                                        .rotationEffect(.degrees(20))
+                                        .opacity(stampOpacity)
+                                }
                             }
                         }
+                        .frame(width: size.width, height: size.height)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .shadow(color: .black.opacity(0.2), radius: index == 0 ? 12 : 6, x: 0, y: 4)
                     }
-                    .frame(width: cardWidth, height: cardHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .shadow(color: .black.opacity(0.2), radius: index == 0 ? 12 : 6, x: 0, y: 4)
-                }
-                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .center)
-                .offset(x: index == 0 ? offset.width : 0, y: index == 0 ? offset.height : CGFloat(index) * 12)
-                .scaleEffect(1.0 - Double(index) * 0.05, anchor: .bottom)
-                .rotationEffect(.degrees(index == 0 ? rotationAngle : 0))
-            } else {
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color.gray.opacity(0.3))
-                    .frame(width: geometry.size.width * 0.85, height: geometry.size.height * 0.8)
-                    .overlay(
-                        Image(systemName: "photo")
-                            .font(.system(size: 60))
-                            .foregroundColor(.gray)
-                    )
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .center)
-                    .offset(y: CGFloat(index) * 12)
+                    .offset(x: index == 0 ? offset.width : 0, y: index == 0 ? offset.height : CGFloat(index) * 12)
                     .scaleEffect(1.0 - Double(index) * 0.05, anchor: .bottom)
+                    .rotationEffect(.degrees(index == 0 ? rotationAngle : 0))
+                } else {
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(width: geometry.size.width * 0.85, height: geometry.size.height * 0.8)
+                        .overlay(
+                            Image(systemName: "photo")
+                                .font(.system(size: 60))
+                                .foregroundColor(.gray)
+                        )
+                        .frame(width: geometry.size.width, height: geometry.size.height, alignment: .center)
+                        .offset(y: CGFloat(index) * 12)
+                        .scaleEffect(1.0 - Double(index) * 0.05, anchor: .bottom)
+                }
             }
-        }
-        .gesture(
+            .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { gesture in
                         if index != 0 { return }
@@ -423,9 +414,9 @@ struct SwipeCard: View {
                         let fastFlick = abs(velocity.width) > 500
                         
                         if offset.width > threshold || (fastFlick && offset.width > 0) {
-                            flyOffScreen(direction: .right, geometry: geometry)
+                            flyOffScreen(direction: .right, containerWidth: geometry.size.width)
                         } else if offset.width < -threshold || (fastFlick && offset.width < 0) {
-                            flyOffScreen(direction: .left, geometry: geometry)
+                            flyOffScreen(direction: .left, containerWidth: geometry.size.width)
                         } else {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
                                 offset = .zero
@@ -433,10 +424,20 @@ struct SwipeCard: View {
                         }
                     }
             )
+        }
     }
     
-    private func flyOffScreen(direction: SwipeDirection, geometry: GeometryProxy) {
-        let offScreenX = direction == .right ? geometry.size.width * 2 : -geometry.size.width * 2
+    private func cardSize(for imageSize: CGSize, in available: CGSize) -> CGSize {
+        let imageAspect = imageSize.width / imageSize.height
+        if imageAspect > available.width / available.height {
+            return CGSize(width: available.width, height: available.width / imageAspect)
+        } else {
+            return CGSize(width: available.height * imageAspect, height: available.height)
+        }
+    }
+    
+    private func flyOffScreen(direction: SwipeDirection, containerWidth: CGFloat) {
+        let offScreenX = direction == .right ? containerWidth * 2 : -containerWidth * 2
         withAnimation(.easeOut(duration: 0.3)) {
             offset = CGSize(width: offScreenX, height: offset.height)
         }
