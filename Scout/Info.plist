@@ -10,7 +10,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>com.pmnewell.falsepositivescout.oauth</string>
+			<string>com.example.falsepositivescout.oauth</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>scout</string>
