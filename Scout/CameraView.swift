@@ -296,7 +296,7 @@ struct CameraView: View {
                             let maxDistance = Double(lastHash.count * 8)
                             let similarity = 1.0 - (Double(hammingDist) / maxDistance)
                             if similarity > similarityThreshold {
-                                print("🔵 [ScoutCapture] skipped: similar=\(String(format: "%.2f", similarity))")
+                                ScoutLog.decision("🔵 [ScoutCapture] skipped: similar=\(String(format: "%.2f", similarity))")
                                 return
                             } else {
                                 saveReason = "dissimilar"
@@ -353,7 +353,7 @@ struct CameraView: View {
                         let orientation = imageWidth < imageHeight ? "portrait" : "landscape"
                         let projectLog = captureModelProject ?? "unknown"
                         let versionLog = captureModelVersion.map(String.init) ?? "?"
-                        print("🔵 [ScoutCapture] saved: reason=\(reason), \(imageWidth)×\(imageHeight) orientation=\(orientation), model=\(projectLog) v\(versionLog)")
+                        ScoutLog.decision("🔵 [ScoutCapture] saved: reason=\(reason), \(imageWidth)×\(imageHeight) orientation=\(orientation), model=\(projectLog) v\(versionLog)")
                     }
                 }
             }
@@ -588,7 +588,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         if !didLogFrameOrientation {
             let bufferWidth = CVPixelBufferGetWidth(imageBuffer)
             let bufferHeight = CVPixelBufferGetHeight(imageBuffer)
-            print("🔵 [ScoutDetect] Frame orientation: buffer \(bufferWidth)×\(bufferHeight), uiImage \(Int(uiImage.size.width))×\(Int(uiImage.size.height))")
+            ScoutLog.decision("🔵 [ScoutDetect] Frame orientation: buffer \(bufferWidth)×\(bufferHeight), uiImage \(Int(uiImage.size.width))×\(Int(uiImage.size.height))")
             didLogFrameOrientation = true
         }
         
@@ -874,7 +874,7 @@ struct DetectionOverlay: View {
                     DispatchQueue.main.async {
                         lastLogTime = now
                         let previewBounds = previewLayer?.bounds ?? .zero
-                        print("🔵 [ScoutDetect] Overlay: imageSize=\(Int(imageSize.width))×\(Int(imageSize.height)), viewSize=\(Int(viewSize.width))×\(Int(viewSize.height)), previewBounds=\(Int(previewBounds.width))×\(Int(previewBounds.height)), dets=\(detections.count)")
+                        ScoutLog.verbose("🔵 [ScoutDetect] Overlay: imageSize=\(Int(imageSize.width))×\(Int(imageSize.height)), viewSize=\(Int(viewSize.width))×\(Int(viewSize.height)), previewBounds=\(Int(previewBounds.width))×\(Int(previewBounds.height)), dets=\(detections.count)")
                     }
                 }
             }()

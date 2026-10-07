@@ -324,7 +324,7 @@ class ModelManager: ObservableObject {
         var classNames: [String] = []
         if let coremlClasses = coremlDict["classes"] as? [String] {
             classNames = coremlClasses
-            print("🔵 [ScoutDetect] /coreml endpoint classes[\(coremlClasses.count)]: \(coremlClasses.joined(separator: ", "))")
+            ScoutLog.decision("🔵 [ScoutDetect] /coreml endpoint classes[\(coremlClasses.count)]: \(coremlClasses.joined(separator: ", "))")
         }
         
         let (_, classColors) = try await fetchProjectMetadata(
@@ -512,18 +512,18 @@ class ModelManager: ObservableObject {
         
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-            print("🟡 [ScoutDetect] fetchCoreMLClasses failed: HTTP \(code)")
+            ScoutLog.decision("🟡 [ScoutDetect] fetchCoreMLClasses failed: HTTP \(code)")
             return []
         }
         
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let coremlDict = json["coreml"] as? [String: Any],
               let classes = coremlDict["classes"] as? [String] else {
-            print("🟡 [ScoutDetect] fetchCoreMLClasses: no coreml.classes in response")
+            ScoutLog.decision("🟡 [ScoutDetect] fetchCoreMLClasses: no coreml.classes in response")
             return []
         }
         
-        print("🔵 [ScoutDetect] fetchCoreMLClasses: \(workspace)/\(project)/\(version) → \(classes.count) classes")
+        ScoutLog.decision("🔵 [ScoutDetect] fetchCoreMLClasses: \(workspace)/\(project)/\(version) → \(classes.count) classes")
         return classes
     }
     
@@ -553,16 +553,16 @@ class ModelManager: ObservableObject {
         
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-            print("🟡 [ScoutDetect] fetchProjectMetadata failed: HTTP \(code)")
+            ScoutLog.decision("🟡 [ScoutDetect] fetchProjectMetadata failed: HTTP \(code)")
             return ([], [:])
         }
         
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            print("🟡 [ScoutDetect] fetchProjectMetadata: Invalid JSON")
+            ScoutLog.decision("🟡 [ScoutDetect] fetchProjectMetadata: Invalid JSON")
             return ([], [:])
         }
         
-        print("🔵 [ScoutDetect] fetchProjectMetadata: \(workspace)/\(project)/\(version)")
+        ScoutLog.decision("🔵 [ScoutDetect] fetchProjectMetadata: \(workspace)/\(project)/\(version)")
         
         if let project = json["project"] as? [String: Any] {
             if let colors = project["colors"] as? [String: String] {
@@ -578,11 +578,11 @@ class ModelManager: ObservableObject {
                 return false
             }) {
                 if let classMap = versionData["class_map"] as? [String: Int] {
-                    print("🔵 [ScoutDetect] class_map found: \(classMap)")
+                    ScoutLog.decision("🔵 [ScoutDetect] class_map found: \(classMap)")
                     
                     let maxIndex = classMap.values.max() ?? 0
                     let minIndex = classMap.values.min() ?? 0
-                    print("🔵 [ScoutDetect] Index range: \(minIndex)...\(maxIndex)")
+                    ScoutLog.decision("🔵 [ScoutDetect] Index range: \(minIndex)...\(maxIndex)")
                     
                     var denseArray = Array(repeating: "", count: maxIndex + 1)
                     for (name, index) in classMap {
@@ -592,10 +592,10 @@ class ModelManager: ObservableObject {
                     }
                     
                     classNames = denseArray
-                    print("🔵 [ScoutDetect] Dense classLabels[\(denseArray.count)]: \(denseArray.enumerated().map { "\($0):\($1.isEmpty ? "—" : $1)" }.joined(separator: ", "))")
+                    ScoutLog.decision("🔵 [ScoutDetect] Dense classLabels[\(denseArray.count)]: \(denseArray.enumerated().map { "\($0):\($1.isEmpty ? "—" : $1)" }.joined(separator: ", "))")
                 } else if let classes = versionData["classes"] as? [String] {
                     classNames = classes
-                    print("🔵 [ScoutDetect] classes array: \(classes)")
+                    ScoutLog.decision("🔵 [ScoutDetect] classes array: \(classes)")
                 }
             }
         }
@@ -839,16 +839,16 @@ class ModelManager: ObservableObject {
         
         let inputDesc = mlModel.modelDescription.inputDescriptionsByName.values.first
         let imageConstraint = inputDesc?.imageConstraint
-        print("🔵 [ScoutDetect] Model loaded: \(workspace)/\(projectSlug)/\(versionNum)")
-        print("🔵 [ScoutDetect] ImageConstraint: \(imageConstraint?.pixelsWide ?? 0)×\(imageConstraint?.pixelsHigh ?? 0)")
-        print("🔵 [ScoutDetect] Backend: \(backend == .rfDetrTensors ? "RF-DETR" : "Vision/YOLO")")
+        ScoutLog.decision("🔵 [ScoutDetect] Model loaded: \(workspace)/\(projectSlug)/\(versionNum)")
+        ScoutLog.decision("🔵 [ScoutDetect] ImageConstraint: \(imageConstraint?.pixelsWide ?? 0)×\(imageConstraint?.pixelsHigh ?? 0)")
+        ScoutLog.decision("🔵 [ScoutDetect] Backend: \(backend == .rfDetrTensors ? "RF-DETR" : "Vision/YOLO")")
         
         if extractedLabels.isEmpty,
            let classData = UserDefaults.standard.data(forKey: "scout_model_classes_v2_\(workspace)_\(projectSlug)_\(versionNum)"),
            let classNames = try? JSONDecoder().decode([String].self, from: classData) {
             extractedLabels = classNames
             labelSource = "/coreml (cached)"
-            print("🔵 [ScoutDetect] Loaded classes from cache v2: \(classNames.count) entries")
+            ScoutLog.decision("🔵 [ScoutDetect] Loaded classes from cache v2: \(classNames.count) entries")
         }
         
         if extractedLabels.isEmpty {
@@ -864,7 +864,7 @@ class ModelManager: ObservableObject {
                 if let classData = try? JSONEncoder().encode(fetchedClasses) {
                     UserDefaults.standard.set(classData, forKey: "scout_model_classes_v2_\(workspace)_\(projectSlug)_\(versionNum)")
                 }
-                print("🔵 [ScoutDetect] Refetched classes from /coreml: \(fetchedClasses.count) entries")
+                ScoutLog.decision("🔵 [ScoutDetect] Refetched classes from /coreml: \(fetchedClasses.count) entries")
             }
         }
         
@@ -899,7 +899,7 @@ class ModelManager: ObservableObject {
             preprocessMode = metadata.mode
         } else if backend == .rfDetrTensors {
             preprocessMode = .stretch
-            print("⚠️ No preprocessing metadata found, defaulting to Stretch for RF-DETR")
+            ScoutLog.decision("⚠️ No preprocessing metadata found, defaulting to Stretch for RF-DETR")
         }
         
         await MainActor.run {
@@ -928,10 +928,10 @@ class ModelManager: ObservableObject {
             self.loadedProject = project
             self.loadedVersion = version
             
-            print("🔵 [ScoutDetect] ResizeMode: \(preprocessMode == .stretch ? "Stretch" : preprocessMode == .letterbox ? "Letterbox" : "CenterCrop")")
-            print("🔵 [ScoutDetect] Label source: \(labelSource)")
-            print("🔵 [ScoutDetect] Full index→name: [\(extractedLabels.enumerated().map { "\($0):\($1.isEmpty ? "—" : $1)" }.joined(separator: ", "))]")
-            print("🔵 [ScoutDetect] Colors: \(colors.count) classes with colors")
+            ScoutLog.decision("🔵 [ScoutDetect] ResizeMode: \(preprocessMode == .stretch ? "Stretch" : preprocessMode == .letterbox ? "Letterbox" : "CenterCrop")")
+            ScoutLog.decision("🔵 [ScoutDetect] Label source: \(labelSource)")
+            ScoutLog.decision("🔵 [ScoutDetect] Full index→name: [\(extractedLabels.enumerated().map { "\($0):\($1.isEmpty ? "—" : $1)" }.joined(separator: ", "))]")
+            ScoutLog.decision("🔵 [ScoutDetect] Colors: \(colors.count) classes with colors")
         }
     }
     
@@ -959,7 +959,7 @@ class ModelManager: ObservableObject {
             if isRFDetr {
                 let hasBackground = !classLabels.isEmpty && classLabels[0].lowercased().contains("background")
                 if !hasBackground {
-                    print("🔵 [ScoutDetect] Ignoring Core ML classLabels (RF-DETR without background slot)")
+                    ScoutLog.decision("🔵 [ScoutDetect] Ignoring Core ML classLabels (RF-DETR without background slot)")
                     return []
                 }
             }
@@ -973,7 +973,7 @@ class ModelManager: ObservableObject {
                         if isRFDetr {
                             let hasBackground = !parsed.isEmpty && parsed[0].lowercased().contains("background")
                             if !hasBackground {
-                                print("🔵 [ScoutDetect] Ignoring Core ML metadata classLabels (RF-DETR without background slot)")
+                                ScoutLog.decision("🔵 [ScoutDetect] Ignoring Core ML metadata classLabels (RF-DETR without background slot)")
                                 return []
                             }
                         }
@@ -991,7 +991,7 @@ class ModelManager: ObservableObject {
                             if isRFDetr {
                                 let hasBackground = !parsed.isEmpty && parsed[0].lowercased().contains("background")
                                 if !hasBackground {
-                                    print("🔵 [ScoutDetect] Ignoring Core ML metadata classLabels (RF-DETR without background slot)")
+                                    ScoutLog.decision("🔵 [ScoutDetect] Ignoring Core ML metadata classLabels (RF-DETR without background slot)")
                                     return []
                                 }
                             }
@@ -1009,7 +1009,7 @@ class ModelManager: ObservableObject {
                         if isRFDetr {
                             let hasBackground = !parsed.isEmpty && parsed[0].lowercased().contains("background")
                             if !hasBackground {
-                                print("🔵 [ScoutDetect] Ignoring Core ML metadata classLabels (RF-DETR without background slot)")
+                                ScoutLog.decision("🔵 [ScoutDetect] Ignoring Core ML metadata classLabels (RF-DETR without background slot)")
                                 return []
                             }
                         }
@@ -1143,7 +1143,7 @@ class ModelManager: ObservableObject {
                 try await loadCachedModel(from: cacheURL, workspace: workspace, project: projectSlug, version: versionNum)
             } catch {
                 // Silent fail at startup - user can retry in Settings
-                print("Failed to load cached model at startup: \(error)")
+                ScoutLog.decision("Failed to load cached model at startup: \(error)")
             }
         }
     }
@@ -1162,7 +1162,7 @@ class ModelManager: ObservableObject {
         let bufferWidth = Double(CVPixelBufferGetWidth(pixelBuffer))
         let bufferHeight = Double(CVPixelBufferGetHeight(pixelBuffer))
         
-        print("🔵 [ScoutDetect] Frame buffer: \(Int(bufferWidth))×\(Int(bufferHeight))")
+        ScoutLog.verbose("🔵 [ScoutDetect] Frame buffer: \(Int(bufferWidth))×\(Int(bufferHeight))")
         
         if inferenceBackend == .rfDetrTensors {
             let result = try await detectRFDetrDirect(
@@ -1174,9 +1174,9 @@ class ModelManager: ObservableObject {
             )
             
             if !result.isEmpty {
-                print("🔵 [ScoutDetect] After remap: \(result.count) detections")
+                ScoutLog.verbose("🔵 [ScoutDetect] After remap: \(result.count) detections")
                 if let first = result.first {
-                    print("🔵 [ScoutDetect] First remapped: \(first.className) box=(\(Int(first.x)),\(Int(first.y)),\(Int(first.width))×\(Int(first.height)))")
+                    ScoutLog.verbose("🔵 [ScoutDetect] First remapped: \(first.className) box=(\(Int(first.x)),\(Int(first.y)),\(Int(first.width))×\(Int(first.height)))")
                 }
             }
             
@@ -1227,7 +1227,7 @@ class ModelManager: ObservableObject {
         let modelWidth = imageConstraint.pixelsWide
         let modelHeight = imageConstraint.pixelsHigh
         
-        print("🔵 [ScoutDetect] Resizing \(Int(imageWidth))×\(Int(imageHeight)) → \(modelWidth)×\(modelHeight) mode=\(preprocessingMode == .stretch ? "Stretch" : "Letterbox")")
+        ScoutLog.verbose("🔵 [ScoutDetect] Resizing \(Int(imageWidth))×\(Int(imageHeight)) → \(modelWidth)×\(modelHeight) mode=\(preprocessingMode == .stretch ? "Stretch" : "Letterbox")")
         
         let (resizedBuffer, scaleInfo) = try resizePixelBufferForModel(
             pixelBuffer,
@@ -1240,9 +1240,9 @@ class ModelManager: ObservableObject {
         
         switch scaleInfo {
         case .stretch(let scaleX, let scaleY):
-            print("🔵 [ScoutDetect] Stretch remap: scaleX=\(String(format: "%.3f", scaleX)), scaleY=\(String(format: "%.3f", scaleY))")
+            ScoutLog.verbose("🔵 [ScoutDetect] Stretch remap: scaleX=\(String(format: "%.3f", scaleX)), scaleY=\(String(format: "%.3f", scaleY))")
         case .letterbox(let scale, let offsetX, let offsetY):
-            print("🔵 [ScoutDetect] Letterbox remap: scale=\(String(format: "%.3f", scale)), offset=(\(Int(offsetX)),\(Int(offsetY)))")
+            ScoutLog.verbose("🔵 [ScoutDetect] Letterbox remap: scale=\(String(format: "%.3f", scale)), offset=(\(Int(offsetX)),\(Int(offsetY)))")
         }
         
         let input = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: resizedBuffer)])
@@ -1336,8 +1336,8 @@ class ModelManager: ObservableObject {
         }
         
         let attrs = [
-            kCVPixelBufferCGImageCompatibilityKey: kCFBooleanTrue,
-            kCVPixelBufferCGBitmapContextCompatibilityKey: kCFBooleanTrue,
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true,
             kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary
         ] as CFDictionary
         
@@ -1417,8 +1417,8 @@ class ModelManager: ObservableObject {
         let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
         
         let attrs = [
-            kCVPixelBufferCGImageCompatibilityKey: kCFBooleanTrue,
-            kCVPixelBufferCGBitmapContextCompatibilityKey: kCFBooleanTrue,
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true,
             kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary
         ] as CFDictionary
         
@@ -1523,7 +1523,7 @@ class ModelManager: ObservableObject {
             throw ModelError.unsupportedModelTypeWithReason("Unexpected boxes shape: \(boxesFeature.shape)")
         }
         
-        print("🔵 [ScoutDetect] decodeRFDetrOutput: \(numDetections) raw detections from model")
+        ScoutLog.verbose("🔵 [ScoutDetect] decodeRFDetrOutput: \(numDetections) raw detections from model")
         
         var detections: [Detection] = []
         detections.reserveCapacity(min(numDetections, 64))
@@ -1573,7 +1573,7 @@ class ModelManager: ObservableObject {
                     mappingNote = "empty@\(labelIdx)"
                 } else if name.lowercased().starts(with: "background_class") {
                     if detections.count < 3 {
-                        print("🔵 [ScoutDetect] Skipping background detection: idx=\(labelIdx) name=\"\(name)\"")
+                        ScoutLog.verbose("🔵 [ScoutDetect] Skipping background detection: idx=\(labelIdx) name=\"\(name)\"")
                     }
                     continue
                 } else {
@@ -1595,7 +1595,7 @@ class ModelManager: ObservableObject {
             let height = Double(h) * imageHeight
             
             if detections.count < 3 {
-                print("🔵 [ScoutDetect] Det \(detections.count): labelIdx=\(labelIdx) → \"\(className)\" [\(mappingNote)] score=\(Int(score*100))% box=(\(Int(centerX)),\(Int(centerY)),\(Int(width))×\(Int(height)))")
+                ScoutLog.verbose("🔵 [ScoutDetect] Det \(detections.count): labelIdx=\(labelIdx) → \"\(className)\" [\(mappingNote)] score=\(Int(score*100))% box=(\(Int(centerX)),\(Int(centerY)),\(Int(width))×\(Int(height)))")
             }
             
             detections.append(Detection(
@@ -1609,9 +1609,9 @@ class ModelManager: ObservableObject {
         }
         
         if !topDetections.isEmpty {
-            print("🔵 [ScoutDetect] Top raw: \(topDetections.map { "idx\($0.idx):\(Int($0.score*100))%" }.joined(separator: ", "))")
+            ScoutLog.verbose("🔵 [ScoutDetect] Top raw: \(topDetections.map { "idx\($0.idx):\(Int($0.score*100))%" }.joined(separator: ", "))")
         }
-        print("🔵 [ScoutDetect] After threshold: \(detections.count) detections")
+        ScoutLog.verbose("🔵 [ScoutDetect] After threshold: \(detections.count) detections")
         
         return detections
     }
@@ -1805,8 +1805,8 @@ enum ModelError: LocalizedError {
 extension UIImage {
     func toCVPixelBuffer() -> CVPixelBuffer? {
         let attrs = [
-            kCVPixelBufferCGImageCompatibilityKey: kCFBooleanTrue,
-            kCVPixelBufferCGBitmapContextCompatibilityKey: kCFBooleanTrue
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true
         ] as CFDictionary
         
         var pixelBuffer: CVPixelBuffer?

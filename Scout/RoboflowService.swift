@@ -193,18 +193,20 @@ class RoboflowService {
     ) async throws -> String {
         let auth = try await getAuthMethod(apiKey: apiKey)
         
-        guard case .oauth(let token) = auth, true else {
-            // API key path exists but requires different handling
-            if case .apiKey(let key) = auth {
-                return try await uploadImageWithAPIKey(
-                    image: image,
-                    imageName: imageName,
-                    project: project,
-                    tag: tag,
-                    batchName: batchName,
-                    apiKey: key
-                )
-            }
+        let token: String
+        switch auth {
+        case .oauth(let oauthToken):
+            token = oauthToken
+        case .apiKey(let key):
+            return try await uploadImageWithAPIKey(
+                image: image,
+                imageName: imageName,
+                project: project,
+                tag: tag,
+                batchName: batchName,
+                apiKey: key
+            )
+        case .none:
             throw RoboflowError.authenticationRequired
         }
         
@@ -423,17 +425,17 @@ class RoboflowService {
                message.contains("already annotated") {
                 return
             }
-            print("🔴 [ScoutNullify] 409 response: \(responseBody)")
+            ScoutLog.decision("🔴 [ScoutNullify] 409 response: \(responseBody)")
         }
         
         guard httpResponse.statusCode == 200 else {
-            print("🔴 [ScoutNullify] annotate failed status=\(httpResponse.statusCode) body=\(responseBody)")
+            ScoutLog.decision("🔴 [ScoutNullify] annotate failed status=\(httpResponse.statusCode) body=\(responseBody)")
             throw RoboflowError.annotationFailed(message: responseBody.isEmpty ? "Annotation failed" : responseBody)
         }
         
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let success = json["success"] as? Bool, !success {
-                print("🔴 [ScoutNullify] annotate success=false body=\(responseBody)")
+                ScoutLog.decision("🔴 [ScoutNullify] annotate success=false body=\(responseBody)")
                 let errorMessage = json["error"] as? String ?? responseBody
                 throw RoboflowError.annotationFailed(message: errorMessage.isEmpty ? "Annotation failed" : errorMessage)
             }
