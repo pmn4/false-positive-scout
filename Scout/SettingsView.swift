@@ -4,7 +4,7 @@ import SwiftUI
 // OAuth-based configuration for Roboflow
 
 struct SettingsView: View {
-    @AppStorage("scout_project") private var project: String = ""
+    @AppStorage("scout_upload_project") private var project: String = ""
     @AppStorage("scout_model_workspace") private var modelWorkspace: String = ""
     @AppStorage("scout_model_project") private var modelProject: String = ""
     @AppStorage("scout_model_version") private var modelVersion: String = ""
