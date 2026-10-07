@@ -502,7 +502,20 @@ struct SettingsView: View {
             }
             .onAppear {
                 // Load API key from Keychain
-                apiKey = KeychainHelper.loadAPIKey() ?? ""
+                apiKey = KeychainHelper.loadAPIKey() ?? Secrets.roboflowAPIKey ?? ""
+                if modelWorkspace.isEmpty, let ws = Secrets.roboflowWorkspace {
+                    modelWorkspace = ws
+                }
+                if modelProject.isEmpty, let proj = Secrets.roboflowProject {
+                    // Prefer full workspace/project id when workspace known
+                    if proj.contains("/") {
+                        modelProject = proj
+                    } else if !modelWorkspace.isEmpty {
+                        modelProject = "\(modelWorkspace)/\(proj)"
+                    } else {
+                        modelProject = proj
+                    }
+                }
                 
                 if oauthManager.isAuthenticated && workspaces.isEmpty {
                     loadWorkspacesAndProjects()

@@ -75,7 +75,19 @@ struct ModelPickerSheet: View {
                 }
             }
             .onAppear {
-                apiKey = KeychainHelper.loadAPIKey() ?? ""
+                apiKey = KeychainHelper.loadAPIKey() ?? Secrets.roboflowAPIKey ?? ""
+                if modelWorkspace.isEmpty, let ws = Secrets.roboflowWorkspace {
+                    modelWorkspace = ws
+                }
+                if modelProject.isEmpty, let proj = Secrets.roboflowProject {
+                    if proj.contains("/") {
+                        modelProject = proj
+                    } else if !modelWorkspace.isEmpty {
+                        modelProject = "\(modelWorkspace)/\(proj)"
+                    } else {
+                        modelProject = proj
+                    }
+                }
                 if !apiKey.isEmpty || oauthManager.isAuthenticated {
                     loadInitialData()
                 }

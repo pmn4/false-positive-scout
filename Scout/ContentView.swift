@@ -41,7 +41,7 @@ struct ContentView: View {
             if !hasCheckedInitialAuth {
                 hasCheckedInitialAuth = true
                 
-                let apiKey = KeychainHelper.loadAPIKey() ?? ""
+                let apiKey = KeychainHelper.loadAPIKey() ?? Secrets.roboflowAPIKey ?? ""
                 let isConfigured: Bool
                 
                 if OAuthConfig.isEnabled {
