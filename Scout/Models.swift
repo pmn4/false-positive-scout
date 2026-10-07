@@ -123,6 +123,14 @@ class FrameStorage: ObservableObject {
         }
     }
     
+    func undoReview(_ frame: CapturedFrame, previousKept: Bool) {
+        if let index = frames.firstIndex(where: { $0.id == frame.id }) {
+            frames[index].reviewed = false
+            frames[index].kept = previousKept
+            saveFrames()
+        }
+    }
+    
     private func saveFrames() {
         // Store metadata without image data to avoid UserDefaults size limits
         let lightFrames = frames.map { frame in

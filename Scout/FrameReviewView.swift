@@ -8,6 +8,8 @@ struct FrameReviewView: View {
     @ObservedObject var modelManager = ModelManager.shared
     @State private var undoStack: [ReviewAction] = []
     @State private var showingExportSheet = false
+    @State private var topCardOffset: CGSize = .zero
+    @State private var isAnimatingButton = false
     
     private var unreviewedFrames: [CapturedFrame] {
         frameStorage.frames.filter { !$0.reviewed }
@@ -111,69 +113,84 @@ struct FrameReviewView: View {
     }
     
     private var reviewDeckView: some View {
-        VStack(spacing: 20) {
-            Text("\(unreviewedFrames.count) left to review")
-                .font(.headline)
-                .padding(.top)
-            
-            Spacer()
-            
-            ZStack {
-                ForEach(Array(unreviewedFrames.prefix(3).enumerated()), id: \.element.id) { index, frame in
-                    if index < 2 {
+        GeometryReader { geometry in
+            VStack(spacing: 20) {
+                Text("\(unreviewedFrames.count) left to review")
+                    .font(.headline)
+                    .padding(.top)
+                
+                Spacer()
+                
+                ZStack {
+                    ForEach(Array(unreviewedFrames.prefix(3).enumerated()), id: \.element.id) { index, frame in
                         SwipeCard(
                             frame: frame,
                             classColors: modelManager.classColors,
-                            onSwipe: { _ in },
-                            index: index
-                        )
-                        .disabled(true)
-                        .zIndex(Double(2 - index))
-                    } else {
-                        SwipeCard(
-                            frame: frame,
-                            classColors: modelManager.classColors,
+                            offset: index == 0 ? $topCardOffset : .constant(.zero),
                             onSwipe: { direction in
-                                handleSwipe(frame: frame, direction: direction)
+                                if index == 0 {
+                                    handleSwipe(frame: frame, direction: direction)
+                                }
                             },
                             index: index
                         )
                         .zIndex(Double(2 - index))
+                        .offset(y: CGFloat(index) * 8)
+                        .scaleEffect(1.0 - Double(index) * 0.05)
+                        .allowsHitTesting(index == 0)
+                        .id(frame.id)
                     }
                 }
-            }
-            .frame(height: 500)
-            
-            HStack(spacing: 40) {
-                Button(action: {
-                    if let frame = unreviewedFrames.first {
-                        handleSwipe(frame: frame, direction: .left)
-                    }
-                }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 60))
-                        .foregroundColor(.red)
-                }
+                .frame(height: 500)
                 
-                Button(action: {
-                    if let frame = unreviewedFrames.first {
-                        handleSwipe(frame: frame, direction: .right)
+                HStack(spacing: 40) {
+                    Button(action: {
+                        animateButtonSwipe(direction: .left, geometry: geometry)
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 60))
+                            .foregroundColor(.red)
                     }
-                }) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 60))
-                        .foregroundColor(.green)
+                    .disabled(isAnimatingButton)
+                    
+                    Button(action: {
+                        animateButtonSwipe(direction: .right, geometry: geometry)
+                    }) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 60))
+                            .foregroundColor(.green)
+                    }
+                    .disabled(isAnimatingButton)
                 }
+                .padding(.bottom, 40)
+                
+                Spacer()
             }
-            .padding(.bottom, 40)
-            
-            Spacer()
+        }
+    }
+    
+    private func animateButtonSwipe(direction: SwipeDirection, geometry: GeometryProxy) {
+        guard !isAnimatingButton, let frame = unreviewedFrames.first else { return }
+        
+        isAnimatingButton = true
+        let offScreenX = direction == .right ? geometry.size.width * 2 : -geometry.size.width * 2
+        
+        withAnimation(.easeOut(duration: 0.3)) {
+            topCardOffset = CGSize(width: offScreenX, height: 0)
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            handleSwipe(frame: frame, direction: direction)
+            topCardOffset = .zero
+            isAnimatingButton = false
         }
     }
     
     private func handleSwipe(frame: CapturedFrame, direction: SwipeDirection) {
+        let previousKept = frame.kept
+        
         let action = ReviewAction(
-            type: direction == .right ? .accept(frame: frame) : .reject(frame: frame, index: frameStorage.frames.firstIndex(where: { $0.id == frame.id }) ?? 0),
+            type: direction == .right ? .accept(frame: frame, previousKept: previousKept) : .reject(frame: frame, index: frameStorage.frames.firstIndex(where: { $0.id == frame.id }) ?? 0),
             timestamp: Date()
         )
         undoStack.append(action)
@@ -192,11 +209,8 @@ struct FrameReviewView: View {
         guard let lastAction = undoStack.popLast() else { return }
         
         switch lastAction.type {
-        case .accept(let frame):
-            if let index = frameStorage.frames.firstIndex(where: { $0.id == frame.id }) {
-                frameStorage.frames[index].reviewed = false
-                frameStorage.frames[index].kept = false
-            }
+        case .accept(let frame, let previousKept):
+            frameStorage.undoReview(frame, previousKept: previousKept)
             
         case .reject(let frame, let index):
             frameStorage.restoreFrame(frame, at: index)
@@ -216,7 +230,7 @@ struct ReviewAction {
     enum ActionType {
         case delete(frame: CapturedFrame, index: Int)
         case toggleKeep(frameId: UUID, previousState: Bool)
-        case accept(frame: CapturedFrame)
+        case accept(frame: CapturedFrame, previousKept: Bool)
         case reject(frame: CapturedFrame, index: Int)
     }
     
@@ -227,12 +241,14 @@ struct ReviewAction {
 struct SwipeCard: View {
     let frame: CapturedFrame
     let classColors: [String: String]
+    @Binding var offset: CGSize
     let onSwipe: (SwipeDirection) -> Void
     let index: Int
     
-    @State private var offset: CGSize = .zero
     @State private var isLongPressing = false
-    @GestureState private var isDetectingLongPress = false
+    @State private var touchStartTime: Date?
+    @State private var initialTouchLocation: CGPoint?
+    @State private var longPressTask: Task<Void, Never>?
     
     private var rotationAngle: Double {
         Double(offset.width) / 20.0
@@ -299,47 +315,78 @@ struct SwipeCard: View {
             .frame(width: geometry.size.width, height: geometry.size.height)
             .offset(x: offset.width, y: offset.height)
             .rotationEffect(.degrees(rotationAngle))
-            .scaleEffect(index == 0 ? 1.0 : 1.0 - Double(index) * 0.05)
-            .opacity(index == 0 ? 1.0 : 0.8)
             .gesture(
-                DragGesture()
+                DragGesture(minimumDistance: 0)
                     .onChanged { gesture in
-                        if index == 0 {
-                            offset = gesture.translation
-                        }
-                    }
-                    .onEnded { gesture in
-                        if index == 0 {
-                            let threshold: CGFloat = 120.0
-                            let velocity = CGSize(
-                                width: gesture.predictedEndTranslation.width - gesture.translation.width,
-                                height: gesture.predictedEndTranslation.height - gesture.translation.height
-                            )
-                            let fastFlick = abs(velocity.width) > 500
+                        if index != 0 { return }
+                        
+                        if touchStartTime == nil {
+                            touchStartTime = Date()
+                            initialTouchLocation = gesture.location
                             
-                            if offset.width > threshold || (fastFlick && offset.width > 0) {
-                                flyOffScreen(direction: .right, geometry: geometry)
-                            } else if offset.width < -threshold || (fastFlick && offset.width < 0) {
-                                flyOffScreen(direction: .left, geometry: geometry)
-                            } else {
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
-                                    offset = .zero
+                            longPressTask?.cancel()
+                            longPressTask = Task {
+                                try? await Task.sleep(nanoseconds: 250_000_000)
+                                
+                                if let start = initialTouchLocation,
+                                   let current = initialTouchLocation {
+                                    let distance = hypot(current.x - start.x, current.y - start.y)
+                                    if distance < 10 {
+                                        await MainActor.run {
+                                            withAnimation(.easeInOut(duration: 0.2)) {
+                                                isLongPressing = true
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if let start = initialTouchLocation {
+                            let distance = hypot(gesture.location.x - start.x, gesture.location.y - start.y)
+                            if distance > 10 {
+                                longPressTask?.cancel()
+                                if !isLongPressing {
+                                    offset = gesture.translation
                                 }
                             }
                         }
                     }
-            )
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.25)
-                    .updating($isDetectingLongPress) { currentState, gestureState, _ in
-                        gestureState = currentState
+                    .onEnded { gesture in
+                        if index != 0 { return }
+                        
+                        longPressTask?.cancel()
+                        touchStartTime = nil
+                        initialTouchLocation = nil
+                        
+                        if isLongPressing {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isLongPressing = false
+                            }
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                offset = .zero
+                            }
+                            return
+                        }
+                        
+                        let threshold: CGFloat = 120.0
+                        let velocity = CGSize(
+                            width: gesture.predictedEndTranslation.width - gesture.translation.width,
+                            height: gesture.predictedEndTranslation.height - gesture.translation.height
+                        )
+                        let fastFlick = abs(velocity.width) > 500
+                        
+                        if offset.width > threshold || (fastFlick && offset.width > 0) {
+                            flyOffScreen(direction: .right, geometry: geometry)
+                        } else if offset.width < -threshold || (fastFlick && offset.width < 0) {
+                            flyOffScreen(direction: .left, geometry: geometry)
+                        } else {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                offset = .zero
+                            }
+                        }
                     }
             )
-            .onChange(of: isDetectingLongPress) { newValue in
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isLongPressing = newValue
-                }
-            }
         }
     }
     
