@@ -106,8 +106,6 @@ class RoboflowService {
             throw RoboflowError.apiError(statusCode: httpResponse.statusCode, message: "Failed to fetch workspaces: \(errorBody)")
         }
         
-        let decoder = JSONDecoder()
-        
         // SIWR/docs return {"workspace":"slug",...}, not {"workspaces":[...]}
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             // Try single workspace string (SIWR response)

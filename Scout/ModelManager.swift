@@ -203,7 +203,7 @@ class ModelManager: ObservableObject {
                     return aNum > bNum
                 }
                 
-                DispatchQueue.main.async {
+                await MainActor.run {
                     self.availableModels = models
                 }
                 
@@ -261,7 +261,10 @@ class ModelManager: ObservableObject {
         var queryItems: [URLQueryItem] = []
         
         #if os(iOS)
-        if let deviceID = UIDevice.current.identifierForVendor?.uuidString {
+        let deviceID = await MainActor.run {
+            UIDevice.current.identifierForVendor?.uuidString
+        }
+        if let deviceID {
             queryItems.append(URLQueryItem(name: "device", value: deviceID))
         }
         #endif
@@ -319,7 +322,7 @@ class ModelManager: ObservableObject {
             }
         }
         
-        var preprocessInfo = extractPreprocessingInfo(from: json)
+        let preprocessInfo = extractPreprocessingInfo(from: json)
         
         var classNames: [String] = []
         if let coremlClasses = coremlDict["classes"] as? [String] {
@@ -681,7 +684,7 @@ class ModelManager: ObservableObject {
                 try? fileManager.removeItem(at: extractDir)
                 return finalURL
                 
-            case .mlmodelWithWeights(let modelURL, let weightsDir):
+            case .mlmodelWithWeights(_, _):
                 return extractDir
                 
             case .standalone(let url):
@@ -902,6 +905,11 @@ class ModelManager: ObservableObject {
             ScoutLog.decision("⚠️ No preprocessing metadata found, defaulting to Stretch for RF-DETR")
         }
         
+        let labelsForMain = extractedLabels
+        let colorsForMain = colors
+        let preprocessForMain = preprocessMode
+        let labelSourceForMain = labelSource
+        
         await MainActor.run {
             let currentWorkspace = UserDefaults.standard.string(forKey: "scout_model_workspace") ?? ""
             let currentProject = UserDefaults.standard.string(forKey: "scout_model_project") ?? ""
@@ -920,18 +928,18 @@ class ModelManager: ObservableObject {
             
             self.currentModel = mlModel
             self.currentVNCoreMLModel = vnModel
-            self.classLabels = extractedLabels
-            self.classColors = colors
+            self.classLabels = labelsForMain
+            self.classColors = colorsForMain
             self.inferenceBackend = backend
-            self.preprocessingMode = preprocessMode
+            self.preprocessingMode = preprocessForMain
             self.loadedWorkspace = workspace
             self.loadedProject = project
             self.loadedVersion = version
             
-            ScoutLog.decision("🔵 [ScoutDetect] ResizeMode: \(preprocessMode == .stretch ? "Stretch" : preprocessMode == .letterbox ? "Letterbox" : "CenterCrop")")
-            ScoutLog.decision("🔵 [ScoutDetect] Label source: \(labelSource)")
-            ScoutLog.decision("🔵 [ScoutDetect] Full index→name: [\(extractedLabels.enumerated().map { "\($0):\($1.isEmpty ? "—" : $1)" }.joined(separator: ", "))]")
-            ScoutLog.decision("🔵 [ScoutDetect] Colors: \(colors.count) classes with colors")
+            ScoutLog.decision("🔵 [ScoutDetect] ResizeMode: \(preprocessForMain == .stretch ? "Stretch" : preprocessForMain == .letterbox ? "Letterbox" : "CenterCrop")")
+            ScoutLog.decision("🔵 [ScoutDetect] Label source: \(labelSourceForMain)")
+            ScoutLog.decision("🔵 [ScoutDetect] Full index→name: [\(labelsForMain.enumerated().map { "\($0):\($1.isEmpty ? "—" : $1)" }.joined(separator: ", "))]")
+            ScoutLog.decision("🔵 [ScoutDetect] Colors: \(colorsForMain.count) classes with colors")
         }
     }
     
