@@ -377,6 +377,8 @@ class CameraManager: NSObject, ObservableObject {
     private var currentInput: AVCaptureDeviceInput?
     private var latestFrame: UIImage?
     @Published var latestFrameSize: CGSize = .zero
+    private let ciContext = CIContext()
+    private var didLogFrameOrientation = false
     
     func checkPermissions() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -419,6 +421,22 @@ class CameraManager: NSObject, ObservableObject {
             session.addOutput(videoOutput)
         }
         
+        if let connection = videoOutput.connection(with: .video) {
+            if #available(iOS 17.0, *) {
+                if connection.isVideoRotationAngleSupported(90) {
+                    connection.videoRotationAngle = 90
+                }
+            } else {
+                if connection.isVideoOrientationSupported {
+                    connection.videoOrientation = .portrait
+                }
+            }
+            
+            if currentCamera == .front {
+                connection.isVideoMirrored = true
+            }
+        }
+        
         session.commitConfiguration()
     }
     
@@ -454,35 +472,21 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             return
         }
         
-        if connection.isVideoOrientationSupported {
-            connection.videoOrientation = .portrait
-        }
-        
         let ciImage = CIImage(cvPixelBuffer: imageBuffer)
-        let context = CIContext()
         
-        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+        guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else {
             return
         }
         
-        var orientation: UIImage.Orientation = .up
-        if let conn = output.connection(with: .video), conn.isVideoOrientationSupported {
-            switch conn.videoOrientation {
-            case .portrait:
-                orientation = .right
-            case .portraitUpsideDown:
-                orientation = .left
-            case .landscapeRight:
-                orientation = .up
-            case .landscapeLeft:
-                orientation = .down
-            @unknown default:
-                orientation = .up
-            }
-        }
-        
-        let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: orientation)
+        let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: .up)
         latestFrame = uiImage
+        
+        if !didLogFrameOrientation {
+            let bufferWidth = CVPixelBufferGetWidth(imageBuffer)
+            let bufferHeight = CVPixelBufferGetHeight(imageBuffer)
+            print("🔵 [ScoutDetect] Frame orientation: buffer \(bufferWidth)×\(bufferHeight), uiImage \(Int(uiImage.size.width))×\(Int(uiImage.size.height))")
+            didLogFrameOrientation = true
+        }
         
         DispatchQueue.main.async { [weak self] in
             self?.latestFrameSize = uiImage.size
@@ -707,7 +711,7 @@ struct DetectionOverlay: View {
         let offsetX: CGFloat
         let offsetY: CGFloat
         
-        if imageAspect > viewAspect {
+        if imageAspect < viewAspect {
             scale = viewSize.width / imageSize.width
             offsetX = 0
             offsetY = (viewSize.height - imageSize.height * scale) / 2
