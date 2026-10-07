@@ -61,3 +61,19 @@ iOSInjectionProject/
 .env
 .env.local
 *.pem
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Xcode user state (beyond xcuserdata/)
+*.xcuserstate
+Scout.xcodeproj/project.xcworkspace/xcuserdata/
+Scout.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Local Core ML artifacts / caches (never commit downloaded models)
+*.mlmodel
+*.mlpackage
+*.mlmodelc
+ModelsCache/
