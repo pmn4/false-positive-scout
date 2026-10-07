@@ -15,6 +15,7 @@ struct CameraView: View {
     @State private var errorMessage: String?
     @State private var lastCaptureTime: Date?
     @State private var lastSavedHash: Data?
+    @State private var lastSavedClassCounts: [String: Int] = [:]
     @State private var captureCount = 0
     @State private var showThresholdSheet = false
     @State private var showModelPicker = false
@@ -189,6 +190,7 @@ struct CameraView: View {
     private func stopCapturing() {
         isCapturing = false
         lastSavedHash = nil
+        lastSavedClassCounts = [:]
     }
     
     private func scheduleDetection() {
@@ -229,6 +231,8 @@ struct CameraView: View {
             if isCapturing && !detections.isEmpty {
                 let now = Date()
                 let currentHash = perceptualHash(image: image)
+                let currentClassCounts = Dictionary(grouping: detections, by: { $0.className })
+                    .mapValues { $0.count }
                 
                 await MainActor.run {
                     guard isCapturing else { return }
@@ -239,20 +243,39 @@ struct CameraView: View {
                         }
                     }
                     
-                    if let lastHash = lastSavedHash,
-                       let currentHash = currentHash {
-                        let hammingDist = hammingDistance(lastHash, currentHash)
-                        let maxDistance = Double(lastHash.count * 8)
-                        let similarity = 1.0 - (Double(hammingDist) / maxDistance)
-                        if similarity > similarityThreshold {
-                            return
-                        }
-                        lastSavedHash = currentHash
+                    var saveReason: String?
+                    
+                    if lastSavedHash == nil {
+                        saveReason = "new"
                     } else {
-                        lastSavedHash = currentHash
+                        var hasMoreObjects = false
+                        for (className, count) in currentClassCounts {
+                            let lastCount = lastSavedClassCounts[className] ?? 0
+                            if count > lastCount {
+                                hasMoreObjects = true
+                                saveReason = "more-objects(\(className) \(lastCount)→\(count))"
+                                break
+                            }
+                        }
+                        
+                        if !hasMoreObjects, let lastHash = lastSavedHash, let currentHash = currentHash {
+                            let hammingDist = hammingDistance(lastHash, currentHash)
+                            let maxDistance = Double(lastHash.count * 8)
+                            let similarity = 1.0 - (Double(hammingDist) / maxDistance)
+                            if similarity > similarityThreshold {
+                                print("🔵 [ScoutCapture] skipped: similar=\(String(format: "%.2f", similarity))")
+                                return
+                            } else {
+                                saveReason = "dissimilar"
+                            }
+                        } else if !hasMoreObjects {
+                            saveReason = "dissimilar"
+                        }
                     }
                     
                     lastCaptureTime = now
+                    lastSavedHash = currentHash
+                    lastSavedClassCounts = currentClassCounts
                     
                     let imageData = image.jpegData(compressionQuality: 0.8)
                     let frame = CapturedFrame(
@@ -263,6 +286,10 @@ struct CameraView: View {
                     
                     frameStorage.addFrame(frame)
                     captureCount = frameStorage.frames.count
+                    
+                    if let reason = saveReason {
+                        print("🔵 [ScoutCapture] saved: reason=\(reason)")
+                    }
                 }
             }
         } catch {
@@ -643,6 +670,120 @@ struct ThresholdBadge: View {
     }
 }
 
+enum DetectionScalingMode {
+    case aspectFill
+    case aspectFit
+}
+
+struct DetectionBoxesView: View {
+    let detections: [Detection]
+    let imageSize: CGSize
+    let classColors: [String: String]
+    let scalingMode: DetectionScalingMode
+    let opacity: Double
+    
+    init(detections: [Detection], imageSize: CGSize, classColors: [String: String], scalingMode: DetectionScalingMode = .aspectFill, opacity: Double = 1.0) {
+        self.detections = detections
+        self.imageSize = imageSize
+        self.classColors = classColors
+        self.scalingMode = scalingMode
+        self.opacity = opacity
+    }
+    
+    var body: some View {
+        GeometryReader { geometry in
+            let viewSize = geometry.size
+            
+            ForEach(detections) { detection in
+                let box = convertToViewCoordinates(
+                    detection: detection,
+                    imageSize: imageSize,
+                    viewSize: viewSize,
+                    scalingMode: scalingMode
+                )
+                
+                let boxColor = colorForClass(detection.className)
+                
+                Rectangle()
+                    .stroke(boxColor, lineWidth: 2)
+                    .frame(width: box.width, height: box.height)
+                    .position(x: box.x, y: box.y)
+                    .opacity(opacity)
+                    .overlay(
+                        Text("\(detection.className) \(Int(detection.confidence * 100))%")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(boxColor.opacity(0.8))
+                            .cornerRadius(4)
+                            .position(x: box.x, y: box.y - box.height / 2 - 12)
+                            .opacity(opacity)
+                    )
+            }
+        }
+    }
+    
+    private func colorForClass(_ className: String) -> Color {
+        if let hexColor = classColors[className] {
+            return Color(hex: hexColor) ?? .green
+        }
+        
+        let hash = abs(className.hashValue)
+        let hue = Double(hash % 360) / 360.0
+        return Color(hue: hue, saturation: 0.8, brightness: 0.9)
+    }
+    
+    private func convertToViewCoordinates(
+        detection: Detection,
+        imageSize: CGSize,
+        viewSize: CGSize,
+        scalingMode: DetectionScalingMode
+    ) -> (x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat) {
+        guard imageSize.width > 0, imageSize.height > 0, viewSize.width > 0, viewSize.height > 0 else {
+            return (0, 0, 0, 0)
+        }
+        
+        let imageAspect = imageSize.width / imageSize.height
+        let viewAspect = viewSize.width / viewSize.height
+        
+        let scale: CGFloat
+        let offsetX: CGFloat
+        let offsetY: CGFloat
+        
+        switch scalingMode {
+        case .aspectFill:
+            if imageAspect < viewAspect {
+                scale = viewSize.width / imageSize.width
+                offsetX = 0
+                offsetY = (viewSize.height - imageSize.height * scale) / 2
+            } else {
+                scale = viewSize.height / imageSize.height
+                offsetX = (viewSize.width - imageSize.width * scale) / 2
+                offsetY = 0
+            }
+        case .aspectFit:
+            if imageAspect > viewAspect {
+                scale = viewSize.width / imageSize.width
+                offsetX = 0
+                offsetY = (viewSize.height - imageSize.height * scale) / 2
+            } else {
+                scale = viewSize.height / imageSize.height
+                offsetX = (viewSize.width - imageSize.width * scale) / 2
+                offsetY = 0
+            }
+        }
+        
+        let x = CGFloat(detection.x) * scale + offsetX
+        let y = CGFloat(detection.y) * scale + offsetY
+        let width = CGFloat(detection.width) * scale
+        let height = CGFloat(detection.height) * scale
+        
+        return (x, y, width, height)
+    }
+}
+
 struct DetectionOverlay: View {
     let detections: [Detection]
     let imageSize: CGSize
@@ -666,76 +807,13 @@ struct DetectionOverlay: View {
                 }
             }()
             
-            ForEach(detections) { detection in
-                let box = convertToViewCoordinates(
-                    detection: detection,
-                    imageSize: imageSize,
-                    viewSize: viewSize
-                )
-                
-                let boxColor = colorForClass(detection.className)
-                
-                Rectangle()
-                    .stroke(boxColor, lineWidth: 2)
-                    .frame(width: box.width, height: box.height)
-                    .position(x: box.x, y: box.y)
-                    .overlay(
-                        Text("\(detection.className) \(Int(detection.confidence * 100))%")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(boxColor.opacity(0.8))
-                            .cornerRadius(4)
-                            .position(x: box.x, y: box.y - box.height / 2 - 12)
-                    )
-            }
+            DetectionBoxesView(
+                detections: detections,
+                imageSize: imageSize,
+                classColors: classColors,
+                scalingMode: .aspectFill
+            )
         }
-    }
-    
-    private func colorForClass(_ className: String) -> Color {
-        if let hexColor = classColors[className] {
-            return Color(hex: hexColor) ?? .green
-        }
-        
-        let hash = abs(className.hashValue)
-        let hue = Double(hash % 360) / 360.0
-        return Color(hue: hue, saturation: 0.8, brightness: 0.9)
-    }
-    
-    private func convertToViewCoordinates(
-        detection: Detection,
-        imageSize: CGSize,
-        viewSize: CGSize
-    ) -> (x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat) {
-        guard imageSize.width > 0, imageSize.height > 0, viewSize.width > 0, viewSize.height > 0 else {
-            return (0, 0, 0, 0)
-        }
-        
-        let imageAspect = imageSize.width / imageSize.height
-        let viewAspect = viewSize.width / viewSize.height
-        
-        let scale: CGFloat
-        let offsetX: CGFloat
-        let offsetY: CGFloat
-        
-        if imageAspect < viewAspect {
-            scale = viewSize.width / imageSize.width
-            offsetX = 0
-            offsetY = (viewSize.height - imageSize.height * scale) / 2
-        } else {
-            scale = viewSize.height / imageSize.height
-            offsetX = (viewSize.width - imageSize.width * scale) / 2
-            offsetY = 0
-        }
-        
-        let x = CGFloat(detection.x) * scale + offsetX
-        let y = CGFloat(detection.y) * scale + offsetY
-        let width = CGFloat(detection.width) * scale
-        let height = CGFloat(detection.height) * scale
-        
-        return (x, y, width, height)
     }
 }
 
