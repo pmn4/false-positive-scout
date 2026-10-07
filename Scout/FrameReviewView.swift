@@ -1,137 +1,31 @@
 import SwiftUI
 
 // "The bridge is over, the bridge is over" - Nas (probably)
-// Fast swipe-through review interface for captured frames
-
-// "Rewind like a VHS, back to the essence" ~Nas (probably)
-// Undo support for review actions
-struct ReviewAction {
-    enum ActionType {
-        case delete(frame: CapturedFrame, index: Int)
-        case toggleKeep(frameId: UUID, previousState: Bool)
-    }
-    
-    let type: ActionType
-    let timestamp: Date
-}
+// Tinder-style swipe deck for reviewing captured frames
 
 struct FrameReviewView: View {
     @EnvironmentObject var frameStorage: FrameStorage
-    @State private var currentIndex = 0
-    @State private var offset: CGFloat = 0
-    @State private var showingDeleteAlert = false
-    @State private var showingExportSheet = false
+    @ObservedObject var modelManager = ModelManager.shared
     @State private var undoStack: [ReviewAction] = []
+    @State private var showingExportSheet = false
+    
+    private var unreviewedFrames: [CapturedFrame] {
+        frameStorage.frames.filter { !$0.reviewed }
+    }
+    
+    private var reviewedKeptCount: Int {
+        frameStorage.frames.filter { $0.reviewed && $0.kept }.count
+    }
     
     var body: some View {
         NavigationView {
             ZStack {
                 if frameStorage.frames.isEmpty {
-                    VStack(spacing: 20) {
-                        Image(systemName: "photo.on.rectangle.angled")
-                            .font(.system(size: 80))
-                            .foregroundColor(.gray)
-                        
-                        Text("No frames captured yet")
-                            .font(.title2)
-                            .foregroundColor(.gray)
-                        
-                        Text("Point the camera at scenes where nothing should be detected")
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                    }
+                    emptyStateView
+                } else if unreviewedFrames.isEmpty {
+                    allReviewedView
                 } else {
-                    VStack {
-                        Text("Frame \(currentIndex + 1) of \(frameStorage.frames.count)")
-                            .font(.headline)
-                            .padding(.top)
-                        
-                        GeometryReader { geometry in
-                            ZStack {
-                                ForEach(Array(frameStorage.frames.enumerated()), id: \.element.id) { index, frame in
-                                    if abs(index - currentIndex) <= 1 {
-                                        FrameCard(
-                                            frame: frame,
-                                            geometry: geometry,
-                                            offset: offset,
-                                            index: index,
-                                            currentIndex: currentIndex
-                                        )
-                                    }
-                                }
-                            }
-                            .gesture(
-                                DragGesture()
-                                    .onChanged { gesture in
-                                        offset = gesture.translation.width
-                                    }
-                                    .onEnded { gesture in
-                                        let threshold: CGFloat = 100
-                                        
-                                        if gesture.translation.width < -threshold && currentIndex < frameStorage.frames.count - 1 {
-                                            withAnimation {
-                                                currentIndex += 1
-                                                offset = 0
-                                            }
-                                        } else if gesture.translation.width > threshold && currentIndex > 0 {
-                                            withAnimation {
-                                                currentIndex -= 1
-                                                offset = 0
-                                            }
-                                        } else {
-                                            withAnimation {
-                                                offset = 0
-                                            }
-                                        }
-                                    }
-                            )
-                        }
-                        
-                        if currentIndex < frameStorage.frames.count {
-                            let frame = frameStorage.frames[currentIndex]
-                            
-                            VStack(spacing: 12) {
-                                Text("\(frame.detections.count) detection\(frame.detections.count != 1 ? "s" : "")")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                                
-                                Text(frame.timestamp, style: .time)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                
-                                HStack(spacing: 20) {
-                                    Button(action: {
-                                        deleteFrame(frame)
-                                    }) {
-                                        Label("Delete", systemImage: "trash")
-                                            .foregroundColor(.white)
-                                            .padding()
-                                            .frame(maxWidth: .infinity)
-                                            .background(Color.red)
-                                            .cornerRadius(12)
-                                    }
-                                    
-                                    Button(action: {
-                                        toggleKeep(frame)
-                                    }) {
-                                        Label(
-                                            frame.kept ? "Kept" : "Discarded",
-                                            systemImage: frame.kept ? "checkmark.circle.fill" : "xmark.circle"
-                                        )
-                                        .foregroundColor(.white)
-                                        .padding()
-                                        .frame(maxWidth: .infinity)
-                                        .background(frame.kept ? Color.green : Color.orange)
-                                        .cornerRadius(12)
-                                    }
-                                }
-                                .padding(.horizontal)
-                            }
-                            .padding(.bottom, 20)
-                        }
-                    }
+                    reviewDeckView
                 }
             }
             .navigationTitle("Review")
@@ -148,482 +42,316 @@ struct FrameReviewView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
+                    if !frameStorage.frames.isEmpty && unreviewedFrames.isEmpty {
                         Button(action: {
                             showingExportSheet = true
                         }) {
-                            Label("Upload & Nullify", systemImage: "square.and.arrow.up")
+                            Image(systemName: "square.and.arrow.up.circle")
                         }
-                        .disabled(frameStorage.exportKeptFrames().isEmpty)
-                        
-                        Button(role: .destructive, action: {
-                            showingDeleteAlert = true
-                        }) {
-                            Label("Clear All", systemImage: "trash")
-                        }
-                        .disabled(frameStorage.frames.isEmpty)
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
+                        .disabled(reviewedKeptCount == 0)
                     }
                 }
             }
-            .alert("Clear All Frames?", isPresented: $showingDeleteAlert) {
-                Button("Cancel", role: .cancel) { }
-                Button("Clear", role: .destructive) {
-                    frameStorage.clearAll()
-                    undoStack.removeAll()
-                    currentIndex = 0
-                }
-            } message: {
-                Text("This will delete all captured frames. This cannot be undone.")
-            }
-            .sheet(isPresented: $showingExportSheet, onDismiss: {
-                // Clamp currentIndex after sheet may have deleted frames
-                if currentIndex >= frameStorage.frames.count {
-                    currentIndex = max(0, frameStorage.frames.count - 1)
-                }
-            }) {
+            .sheet(isPresented: $showingExportSheet) {
                 ExportSheet(frames: frameStorage.exportKeptFrames())
             }
         }
     }
     
-    private func deleteFrame(_ frame: CapturedFrame) {
-        guard let index = frameStorage.frames.firstIndex(where: { $0.id == frame.id }) else {
-            return
-        }
-        
-        // Record action for undo
-        let action = ReviewAction(
-            type: .delete(frame: frame, index: index),
-            timestamp: Date()
-        )
-        undoStack.append(action)
-        
-        frameStorage.deleteFrame(frame)
-        if currentIndex >= frameStorage.frames.count {
-            currentIndex = max(0, frameStorage.frames.count - 1)
+    private var emptyStateView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 80))
+                .foregroundColor(.gray)
+            
+            Text("No frames captured yet")
+                .font(.title2)
+                .foregroundColor(.gray)
+            
+            Text("Point the camera at scenes where nothing should be detected")
+                .font(.subheadline)
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
         }
     }
     
-    private func toggleKeep(_ frame: CapturedFrame) {
-        // Record action for undo
+    private var allReviewedView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: reviewedKeptCount > 0 ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .font(.system(size: 80))
+                .foregroundColor(reviewedKeptCount > 0 ? .green : .gray)
+            
+            Text("All reviewed")
+                .font(.title2)
+                .fontWeight(.bold)
+            
+            Text("\(reviewedKeptCount) ready to upload")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            
+            if reviewedKeptCount > 0 {
+                Button(action: {
+                    showingExportSheet = true
+                }) {
+                    HStack {
+                        Image(systemName: "square.and.arrow.up")
+                        Text("Upload & Nullify")
+                    }
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .background(Color.blue)
+                    .cornerRadius(12)
+                }
+                .padding(.top, 8)
+            }
+        }
+    }
+    
+    private var reviewDeckView: some View {
+        VStack(spacing: 20) {
+            Text("\(unreviewedFrames.count) left to review")
+                .font(.headline)
+                .padding(.top)
+            
+            Spacer()
+            
+            ZStack {
+                ForEach(Array(unreviewedFrames.prefix(3).enumerated()), id: \.element.id) { index, frame in
+                    if index < 2 {
+                        SwipeCard(
+                            frame: frame,
+                            classColors: modelManager.classColors,
+                            onSwipe: { _ in },
+                            index: index
+                        )
+                        .disabled(true)
+                        .zIndex(Double(2 - index))
+                    } else {
+                        SwipeCard(
+                            frame: frame,
+                            classColors: modelManager.classColors,
+                            onSwipe: { direction in
+                                handleSwipe(frame: frame, direction: direction)
+                            },
+                            index: index
+                        )
+                        .zIndex(Double(2 - index))
+                    }
+                }
+            }
+            .frame(height: 500)
+            
+            HStack(spacing: 40) {
+                Button(action: {
+                    if let frame = unreviewedFrames.first {
+                        handleSwipe(frame: frame, direction: .left)
+                    }
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 60))
+                        .foregroundColor(.red)
+                }
+                
+                Button(action: {
+                    if let frame = unreviewedFrames.first {
+                        handleSwipe(frame: frame, direction: .right)
+                    }
+                }) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 60))
+                        .foregroundColor(.green)
+                }
+            }
+            .padding(.bottom, 40)
+            
+            Spacer()
+        }
+    }
+    
+    private func handleSwipe(frame: CapturedFrame, direction: SwipeDirection) {
         let action = ReviewAction(
-            type: .toggleKeep(frameId: frame.id, previousState: frame.kept),
+            type: direction == .right ? .accept(frame: frame) : .reject(frame: frame, index: frameStorage.frames.firstIndex(where: { $0.id == frame.id }) ?? 0),
             timestamp: Date()
         )
         undoStack.append(action)
         
-        frameStorage.toggleKeep(frame)
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.impactOccurred()
+        
+        if direction == .right {
+            frameStorage.markReviewed(frame, kept: true)
+        } else {
+            frameStorage.deleteFrame(frame)
+        }
     }
     
     private func performUndo() {
         guard let lastAction = undoStack.popLast() else { return }
         
         switch lastAction.type {
-        case .delete(let frame, let index):
-            frameStorage.restoreFrame(frame, at: index)
-            currentIndex = min(index, frameStorage.frames.count - 1)
+        case .accept(let frame):
+            if let index = frameStorage.frames.firstIndex(where: { $0.id == frame.id }) {
+                frameStorage.frames[index].reviewed = false
+                frameStorage.frames[index].kept = false
+            }
             
-        case .toggleKeep(let frameId, let previousState):
-            if let frame = frameStorage.frames.first(where: { $0.id == frameId }) {
-                if frame.kept != previousState {
-                    frameStorage.toggleKeep(frame)
-                }
-            }
+        case .reject(let frame, let index):
+            frameStorage.restoreFrame(frame, at: index)
+            
+        case .delete, .toggleKeep:
+            break
         }
     }
 }
 
-struct FrameCard: View {
+enum SwipeDirection {
+    case left
+    case right
+}
+
+struct ReviewAction {
+    enum ActionType {
+        case delete(frame: CapturedFrame, index: Int)
+        case toggleKeep(frameId: UUID, previousState: Bool)
+        case accept(frame: CapturedFrame)
+        case reject(frame: CapturedFrame, index: Int)
+    }
+    
+    let type: ActionType
+    let timestamp: Date
+}
+
+struct SwipeCard: View {
     let frame: CapturedFrame
-    let geometry: GeometryProxy
-    let offset: CGFloat
+    let classColors: [String: String]
+    let onSwipe: (SwipeDirection) -> Void
     let index: Int
-    let currentIndex: Int
     
-    var body: some View {
-        VStack {
-            if let imageData = frame.imageData,
-               let uiImage = UIImage(data: imageData) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: geometry.size.width * 0.9)
-                    .cornerRadius(12)
-                    .shadow(radius: 5)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(frame.kept ? Color.green : Color.orange, lineWidth: 3)
-                    )
-            } else {
-                Rectangle()
-                    .fill(Color.gray.opacity(0.3))
-                    .frame(maxWidth: geometry.size.width * 0.9, maxHeight: geometry.size.height * 0.7)
-                    .cornerRadius(12)
-                    .overlay(
-                        Image(systemName: "photo")
-                            .font(.system(size: 60))
-                            .foregroundColor(.gray)
-                    )
-            }
-        }
-        .offset(x: CGFloat(index - currentIndex) * geometry.size.width + offset)
-        .opacity(index == currentIndex ? 1 : 0.3)
-        .scaleEffect(index == currentIndex ? 1 : 0.8)
-    }
-}
-
-struct ExportSheet: View {
-    let frames: [CapturedFrame]
-    @Environment(\.dismiss) var dismiss
-    @EnvironmentObject var frameStorage: FrameStorage
-    @ObservedObject var oauthManager = OAuthManager.shared
-    @AppStorage("scout_project") private var project: String = ""
-    @State private var apiKey: String = ""  // Load from Keychain
+    @State private var offset: CGSize = .zero
+    @State private var isLongPressing = false
+    @GestureState private var isDetectingLongPress = false
     
-    // "Half real, half incredible, like a myth that's legible" ~Nas (probably)
-    // Track upload state for retry
-    struct PartialSuccess: Identifiable {
-        let id = UUID()
-        let frameId: UUID
-        let imageId: String
-        let imageName: String
-        let image: UIImage
+    private var rotationAngle: Double {
+        Double(offset.width) / 20.0
     }
     
-    @State private var isUploading = false
-    @State private var uploadProgress: UploadProgress?
-    @State private var errorMessage: String?
-    @State private var uploadComplete = false
-    @State private var successCount = 0
-    @State private var failureCount = 0
-    @State private var partialSuccesses: [PartialSuccess] = []
-    @State private var isRetrying = false
-    @State private var currentBatchName: String = ""
+    private var stampOpacity: Double {
+        min(abs(offset.width) / 120.0, 1.0)
+    }
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 20) {
-                if uploadComplete {
-                    Image(systemName: failureCount == 0 && partialSuccesses.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .font(.system(size: 60))
-                        .foregroundColor(failureCount == 0 && partialSuccesses.isEmpty ? .green : .orange)
-                    
-                    Text(failureCount == 0 && partialSuccesses.isEmpty ? "Upload Complete!" : "Upload Finished")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                    
-                    VStack(spacing: 12) {
-                        if successCount > 0 {
-                            Text("✓ \(successCount) frame\(successCount != 1 ? "s" : "") uploaded & marked as null")
-                                .font(.subheadline)
-                                .foregroundColor(.green)
-                        }
-                        
-                        if !partialSuccesses.isEmpty {
-                            VStack(spacing: 8) {
-                                Text("⚠️ \(partialSuccesses.count) frame\(partialSuccesses.count != 1 ? "s" : "") uploaded but nullify failed")
-                                    .font(.subheadline)
-                                    .foregroundColor(.orange)
-                                
-                                Text("Images are in Roboflow but not marked as null. You can mark them as Null in the Roboflow UI, or retry below.")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                
-                                Button(action: {
-                                    retryNullify()
-                                }) {
-                                    Text(isRetrying ? "Retrying..." : "Retry Nullify")
-                                        .font(.subheadline)
-                                        .foregroundColor(.white)
-                                        .padding(.horizontal, 20)
-                                        .padding(.vertical, 8)
-                                        .background(Color.orange)
-                                        .cornerRadius(8)
-                                }
-                                .disabled(isRetrying)
-                            }
-                            .padding(.horizontal)
-                            .padding(.vertical, 8)
-                            .background(Color.orange.opacity(0.1))
-                            .cornerRadius(12)
-                        }
-                        
-                        if failureCount > 0 {
-                            Text("✗ \(failureCount) frame\(failureCount != 1 ? "s" : "") failed to upload")
-                                .font(.subheadline)
-                                .foregroundColor(.red)
-                        }
-                        
-                        if let error = errorMessage, (failureCount > 0 || !partialSuccesses.isEmpty) {
-                            Text("Last error: \(error)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .multilineTextAlignment(.center)
-                                .padding(.top, 4)
-                        }
-                    }
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-                } else {
-                    Image(systemName: "cloud.fill")
-                        .font(.system(size: 60))
-                        .foregroundColor(.blue)
-                    
-                    Text("\(frames.count) frame\(frames.count != 1 ? "s" : "") ready to upload")
-                        .font(.title2)
-                    
-                    Text("Upload these null frames to Roboflow and mark them as negative examples.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    
-                    if let progress = uploadProgress {
-                        VStack(spacing: 12) {
-                            ProgressView(value: progress.percentage) {
-                                Text("Uploading \(progress.current) of \(progress.total)")
-                                    .font(.subheadline)
-                            }
-                            .progressViewStyle(.linear)
+        GeometryReader { geometry in
+            ZStack {
+                if let imageData = frame.imageData,
+                   let uiImage = UIImage(data: imageData) {
+                    VStack {
+                        ZStack {
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
                             
-                            Text(progress.currentImageName)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                        }
-                        .padding(.horizontal)
-                    }
-                    
-                    if let error = errorMessage {
-                        Text(error)
-                            .font(.caption)
-                            .foregroundColor(.red)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                    }
-                    
-                    if (!oauthManager.isAuthenticated && apiKey.isEmpty) || project.isEmpty {
-                        Text("⚠️ Sign in with Roboflow OR configure API key + Project in Settings")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                    }
-                    
-                    Button(action: {
-                        uploadFrames()
-                    }) {
-                        Text(isUploading ? "Uploading..." : "Upload & Nullify")
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(isUploading || (!oauthManager.isAuthenticated && apiKey.isEmpty) || project.isEmpty ? Color.gray : Color.blue)
-                            .cornerRadius(12)
-                    }
-                    .disabled(isUploading || (!oauthManager.isAuthenticated && apiKey.isEmpty) || project.isEmpty)
-                    .padding(.horizontal)
-                }
-                
-                Spacer()
-            }
-            .padding()
-            .navigationTitle("Upload & Nullify")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(uploadComplete ? "Done" : "Cancel") {
-                        dismiss()
-                    }
-                    .disabled(isUploading || isRetrying)
-                }
-            }
-        }
-        .onAppear {
-            // Load API key from Keychain (not UserDefaults)
-            apiKey = KeychainHelper.loadAPIKey() ?? ""
-        }
-    }
-    
-    private func uploadFrames() {
-        guard !project.isEmpty, (oauthManager.isAuthenticated || !apiKey.isEmpty) else {
-            errorMessage = "Please sign in with Roboflow OR configure API key + Project"
-            return
-        }
-        
-        // Capture batch name once for this upload session
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
-        currentBatchName = "Scout - \(dateFormatter.string(from: Date()))"
-        
-        isUploading = true
-        errorMessage = nil
-        successCount = 0
-        failureCount = 0
-        partialSuccesses = []
-        
-        Task {
-            for (index, frame) in frames.enumerated() {
-                guard let imageData = frame.imageData,
-                      let image = UIImage(data: imageData) else {
-                    await MainActor.run {
-                        failureCount += 1
-                    }
-                    continue
-                }
-                
-                let imageName = "null_\(frame.id.uuidString).jpg"
-                
-                await MainActor.run {
-                    uploadProgress = UploadProgress(
-                        current: index + 1,
-                        total: frames.count,
-                        currentImageName: imageName
-                    )
-                }
-                
-                // Check if already uploaded (has imageId)
-                if let existingImageId = frame.uploadedImageId {
-                    // Already uploaded - only try to nullify
-                    do {
-                        try await RoboflowService.shared.annotateAsNull(
-                            imageId: existingImageId,
-                            imageName: imageName,
-                            imageWidth: Int(image.size.width),
-                            imageHeight: Int(image.size.height),
-                            project: project,
-                            apiKey: apiKey.isEmpty ? nil : apiKey
-                        )
-                        
-                        // Full success - remove from review list
-                        await MainActor.run {
-                            successCount += 1
-                            frameStorage.deleteFrame(frame)
-                        }
-                    } catch {
-                        // Nullify failed again - add to partials
-                        await MainActor.run {
-                            partialSuccesses.append(PartialSuccess(
-                                frameId: frame.id,
-                                imageId: existingImageId,
-                                imageName: imageName,
-                                image: image
-                            ))
-                            errorMessage = error.localizedDescription
-                        }
-                    }
-                } else {
-                    // Not yet uploaded - do full upload + nullify
-                    do {
-                        // Upload image first (with batch grouping)
-                        let imageId = try await RoboflowService.shared.uploadImage(
-                            image: image,
-                            imageName: imageName,
-                            project: project,
-                            tag: RoboflowService.defaultUploadTag,
-                            batchName: currentBatchName,
-                            apiKey: apiKey.isEmpty ? nil : apiKey
-                        )
-                        
-                        // Mark as uploaded
-                        await MainActor.run {
-                            frameStorage.markUploaded(frame, imageId: imageId)
-                        }
-                        
-                        // Try to nullify
-                        do {
-                            try await RoboflowService.shared.annotateAsNull(
-                                imageId: imageId,
-                                imageName: imageName,
-                                imageWidth: Int(image.size.width),
-                                imageHeight: Int(image.size.height),
-                                project: project,
-                                apiKey: apiKey.isEmpty ? nil : apiKey
+                            // Raw camera frame - boxes overlaid, NEVER burned in
+                            DetectionBoxesView(
+                                detections: frame.detections,
+                                imageSize: uiImage.size,
+                                classColors: classColors,
+                                scalingMode: .aspectFit,
+                                opacity: isLongPressing ? 0.1 : 1.0
                             )
                             
-                            // Full success - remove from review list
-                            await MainActor.run {
-                                successCount += 1
-                                frameStorage.deleteFrame(frame)
-                            }
-                        } catch {
-                            // Upload succeeded but nullify failed - partial success
-                            await MainActor.run {
-                                partialSuccesses.append(PartialSuccess(
-                                    frameId: frame.id,
-                                    imageId: imageId,
-                                    imageName: imageName,
-                                    image: image
-                                ))
-                                errorMessage = error.localizedDescription
+                            if offset.width > 0 {
+                                Text("KEEP")
+                                    .font(.system(size: 60, weight: .bold))
+                                    .foregroundColor(.green)
+                                    .rotationEffect(.degrees(-20))
+                                    .opacity(stampOpacity)
+                            } else if offset.width < 0 {
+                                Text("REJECT")
+                                    .font(.system(size: 60, weight: .bold))
+                                    .foregroundColor(.red)
+                                    .rotationEffect(.degrees(20))
+                                    .opacity(stampOpacity)
                             }
                         }
-                    } catch {
-                        // Upload failed - full failure
-                        await MainActor.run {
-                            failureCount += 1
-                            errorMessage = error.localizedDescription
+                        .frame(maxWidth: geometry.size.width * 0.85)
+                        .cornerRadius(12)
+                        .shadow(radius: index == 0 ? 8 : 4)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.white, lineWidth: 3)
+                        )
+                    }
+                } else {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(maxWidth: geometry.size.width * 0.85)
+                        .cornerRadius(12)
+                        .overlay(
+                            Image(systemName: "photo")
+                                .font(.system(size: 60))
+                                .foregroundColor(.gray)
+                        )
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .offset(x: offset.width, y: offset.height)
+            .rotationEffect(.degrees(rotationAngle))
+            .scaleEffect(index == 0 ? 1.0 : 1.0 - Double(index) * 0.05)
+            .opacity(index == 0 ? 1.0 : 0.8)
+            .gesture(
+                DragGesture()
+                    .onChanged { gesture in
+                        if index == 0 {
+                            offset = gesture.translation
                         }
                     }
+                    .onEnded { gesture in
+                        if index == 0 {
+                            let threshold: CGFloat = 120.0
+                            let velocity = CGSize(
+                                width: gesture.predictedEndTranslation.width - gesture.translation.width,
+                                height: gesture.predictedEndTranslation.height - gesture.translation.height
+                            )
+                            let fastFlick = abs(velocity.width) > 500
+                            
+                            if offset.width > threshold || (fastFlick && offset.width > 0) {
+                                flyOffScreen(direction: .right, geometry: geometry)
+                            } else if offset.width < -threshold || (fastFlick && offset.width < 0) {
+                                flyOffScreen(direction: .left, geometry: geometry)
+                            } else {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                    offset = .zero
+                                }
+                            }
+                        }
+                    }
+            )
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.25)
+                    .updating($isDetectingLongPress) { currentState, gestureState, _ in
+                        gestureState = currentState
+                    }
+            )
+            .onChange(of: isDetectingLongPress) { newValue in
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isLongPressing = newValue
                 }
-                
-                try? await Task.sleep(nanoseconds: 500_000_000)
-            }
-            
-            await MainActor.run {
-                isUploading = false
-                uploadComplete = true
             }
         }
     }
     
-    private func retryNullify() {
-        guard !partialSuccesses.isEmpty else { return }
+    private func flyOffScreen(direction: SwipeDirection, geometry: GeometryProxy) {
+        let offScreenX = direction == .right ? geometry.size.width * 2 : -geometry.size.width * 2
+        withAnimation(.easeOut(duration: 0.3)) {
+            offset = CGSize(width: offScreenX, height: offset.height)
+        }
         
-        isRetrying = true
-        errorMessage = nil
-        
-        let toRetry = partialSuccesses
-        
-        Task {
-            var remainingFailures: [PartialSuccess] = []
-            var retrySuccesses = 0
-            
-            for partial in toRetry {
-                do {
-                    try await RoboflowService.shared.annotateAsNull(
-                        imageId: partial.imageId,
-                        imageName: partial.imageName,
-                        imageWidth: Int(partial.image.size.width),
-                        imageHeight: Int(partial.image.size.height),
-                        project: project,
-                        apiKey: apiKey.isEmpty ? nil : apiKey
-                    )
-                    
-                    retrySuccesses += 1
-                    
-                    // Remove from review list on full success
-                    await MainActor.run {
-                        if let frame = frameStorage.frames.first(where: { $0.id == partial.frameId }) {
-                            frameStorage.deleteFrame(frame)
-                        }
-                    }
-                } catch {
-                    remainingFailures.append(partial)
-                    await MainActor.run {
-                        errorMessage = error.localizedDescription
-                    }
-                }
-                
-                try? await Task.sleep(nanoseconds: 500_000_000)
-            }
-            
-            await MainActor.run {
-                successCount += retrySuccesses
-                partialSuccesses = remainingFailures
-                isRetrying = false
-            }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            onSwipe(direction)
+            offset = .zero
         }
     }
 }
