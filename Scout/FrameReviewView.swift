@@ -638,7 +638,7 @@ struct ExportSheet: View {
                     }
                     
                     if !canAuthenticate {
-                        Text("⚠️ Sign in with Roboflow OR configure API key in Settings")
+                        Text("⚠️ Configure a Roboflow API key in Settings")
                             .font(.caption)
                             .foregroundColor(.orange)
                             .multilineTextAlignment(.center)
@@ -710,7 +710,7 @@ struct ExportSheet: View {
     
     private func uploadFrames() {
         guard canAuthenticate else {
-            errorMessage = "Please sign in with Roboflow OR configure an API key in Settings"
+            errorMessage = "Please configure a Roboflow API key in Settings"
             return
         }
         

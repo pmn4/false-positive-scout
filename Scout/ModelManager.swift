@@ -1803,7 +1803,7 @@ enum ModelError: LocalizedError {
         case .unsupportedModelTypeWithReason(let reason):
             return reason
         case .authenticationRequired:
-            return "Please sign in with Roboflow or configure an API key in Settings"
+            return "Please configure a Roboflow API key in Settings"
         }
     }
 }

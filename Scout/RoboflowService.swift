@@ -454,7 +454,7 @@ enum RoboflowError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .authenticationRequired:
-            return "Please sign in with Roboflow or configure an API key in Settings"
+            return "Please configure a Roboflow API key in Settings"
         case .imageConversionFailed:
             return "Failed to process image"
         case .invalidURL:
