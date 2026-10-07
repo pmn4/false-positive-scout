@@ -322,8 +322,9 @@ class RoboflowService {
     }
     
     
-    // Annotate image as null using COCO JSON format (OAuth or API key)
-    // Matches Roboflow CLI/SDK mechanism for marking null/negative examples
+    // Annotate image as null using COCO JSON format (OAuth or API key).
+    // Matches Roboflow Python SDK: fake annotation with unmatched image_id so the
+    // image is accepted as COCO but ends up with zero boxes (a null/negative example).
     func annotateAsNull(
         imageId: String,
         imageName: String,
@@ -334,8 +335,19 @@ class RoboflowService {
     ) async throws {
         let auth = try await getAuthMethod(apiKey: apiKey)
         
-        // Build COCO JSON with image but no annotations (null example)
+        // file_name must match the `name` query used on upload (includes extension, e.g. .jpg)
         let cocoJson: [String: Any] = [
+            "info": [
+                "description": "Scout null frame"
+            ],
+            "licenses": [],
+            "categories": [
+                [
+                    "id": 0,
+                    "name": "null",
+                    "supercategory": "none"
+                ]
+            ],
             "images": [
                 [
                     "id": 0,
@@ -344,8 +356,19 @@ class RoboflowService {
                     "height": imageHeight
                 ]
             ],
-            "annotations": [],
-            "categories": []
+            // SDK workaround: non-empty annotations required for COCO recognition,
+            // but image_id does not match any image → zero boxes on this image.
+            "annotations": [
+                [
+                    "id": 999999999,
+                    "image_id": 999999999,
+                    "category_id": 0,
+                    "area": 1,
+                    "bbox": [0, 0, 1, 1],
+                    "segmentation": [],
+                    "iscrowd": 0
+                ]
+            ]
         ]
         
         guard let cocoJsonData = try? JSONSerialization.data(withJSONObject: cocoJson),
@@ -353,15 +376,13 @@ class RoboflowService {
             throw RoboflowError.annotationFailed(message: "Failed to create COCO JSON")
         }
         
-        // Extract project slug from qualified ID
         let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
         
         var components = URLComponents(string: "https://api.roboflow.com/dataset/\(projectSlug)/annotate/\(imageId)")!
         components.queryItems = [
-            URLQueryItem(name: "name", value: "\(imageName).coco.json")
+            URLQueryItem(name: "name", value: "annotation.coco.json")
         ]
         
-        // Add API key to query if using API key auth
         if case .apiKey(let key) = auth {
             components.queryItems?.append(URLQueryItem(name: "api_key", value: key))
         } else if case .none = auth {
@@ -376,14 +397,13 @@ class RoboflowService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        // Add Bearer token if using OAuth
         if case .oauth(let token) = auth {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         
         let payload: [String: Any] = [
             "annotationFile": cocoJsonString,
-            "labelmap": [:]
+            "labelmap": NSNull()
         ]
         
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
@@ -394,6 +414,8 @@ class RoboflowService {
             throw RoboflowError.invalidResponse
         }
         
+        let responseBody = String(data: data, encoding: .utf8) ?? ""
+        
         if httpResponse.statusCode == 409 {
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let error = json["error"] as? [String: Any],
@@ -401,21 +423,24 @@ class RoboflowService {
                message.contains("already annotated") {
                 return
             }
+            print("🔴 [ScoutNullify] 409 response: \(responseBody)")
         }
         
         guard httpResponse.statusCode == 200 else {
-            let errorMessage = String(data: data, encoding: .utf8) ?? "Annotation failed"
-            throw RoboflowError.annotationFailed(message: errorMessage)
+            print("🔴 [ScoutNullify] annotate failed status=\(httpResponse.statusCode) body=\(responseBody)")
+            throw RoboflowError.annotationFailed(message: responseBody.isEmpty ? "Annotation failed" : responseBody)
         }
         
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let success = json["success"] as? Bool, !success {
-                let errorMessage = json["error"] as? String ?? "Annotation failed"
-                throw RoboflowError.annotationFailed(message: errorMessage)
+                print("🔴 [ScoutNullify] annotate success=false body=\(responseBody)")
+                let errorMessage = json["error"] as? String ?? responseBody
+                throw RoboflowError.annotationFailed(message: errorMessage.isEmpty ? "Annotation failed" : errorMessage)
             }
         }
     }
 }
+
 
 enum RoboflowError: LocalizedError {
     case authenticationRequired
