@@ -248,6 +248,7 @@ struct SwipeCard: View {
     @State private var isLongPressing = false
     @State private var touchStartTime: Date?
     @State private var initialTouchLocation: CGPoint?
+    @State private var hasMovedBeyondThreshold = false
     @State private var longPressTask: Task<Void, Never>?
     
     private var rotationAngle: Double {
@@ -323,20 +324,21 @@ struct SwipeCard: View {
                         if touchStartTime == nil {
                             touchStartTime = Date()
                             initialTouchLocation = gesture.location
+                            hasMovedBeyondThreshold = false
                             
                             longPressTask?.cancel()
                             longPressTask = Task {
-                                try? await Task.sleep(nanoseconds: 250_000_000)
+                                do {
+                                    try await Task.sleep(nanoseconds: 250_000_000)
+                                } catch {
+                                    return
+                                }
                                 
-                                if let start = initialTouchLocation,
-                                   let current = initialTouchLocation {
-                                    let distance = hypot(current.x - start.x, current.y - start.y)
-                                    if distance < 10 {
-                                        await MainActor.run {
-                                            withAnimation(.easeInOut(duration: 0.2)) {
-                                                isLongPressing = true
-                                            }
-                                        }
+                                guard !Task.isCancelled, !hasMovedBeyondThreshold else { return }
+                                
+                                await MainActor.run {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        isLongPressing = true
                                     }
                                 }
                             }
@@ -345,6 +347,7 @@ struct SwipeCard: View {
                         if let start = initialTouchLocation {
                             let distance = hypot(gesture.location.x - start.x, gesture.location.y - start.y)
                             if distance > 10 {
+                                hasMovedBeyondThreshold = true
                                 longPressTask?.cancel()
                                 if !isLongPressing {
                                     offset = gesture.translation
@@ -358,6 +361,7 @@ struct SwipeCard: View {
                         longPressTask?.cancel()
                         touchStartTime = nil
                         initialTouchLocation = nil
+                        hasMovedBeyondThreshold = false
                         
                         if isLongPressing {
                             withAnimation(.easeInOut(duration: 0.2)) {
