@@ -11,6 +11,8 @@ struct CameraView: View {
     @ObservedObject var modelManager = ModelManager.shared
     @ObservedObject var thresholdManager = ThresholdManager.shared
     @StateObject private var cameraManager = CameraManager()
+    @Binding var isActive: Bool
+    @Environment(\.scenePhase) private var scenePhase
     @State private var isCapturing = false
     @State private var errorMessage: String?
     @State private var lastCaptureTime: Date?
@@ -154,6 +156,25 @@ struct CameraView: View {
                     startDetection()
                 }
             }
+            .onChange(of: isActive) { active in
+                cameraManager.isActive = active
+                if active && scenePhase == .active {
+                    if modelManager.currentModel != nil {
+                        startDetection()
+                    }
+                } else {
+                    stopDetection()
+                }
+            }
+            .onChange(of: scenePhase) { newPhase in
+                if newPhase == .active && isActive {
+                    if modelManager.currentModel != nil {
+                        startDetection()
+                    }
+                } else if newPhase != .active {
+                    stopDetection()
+                }
+            }
             .sheet(isPresented: $showThresholdSheet) {
                 ThresholdControlSheet(
                     thresholdManager: thresholdManager,
@@ -177,8 +198,16 @@ struct CameraView: View {
         }
         
         errorMessage = nil
-        cameraManager.startSession()
+        DispatchQueue.global(qos: .userInitiated).async { [weak cameraManager] in
+            cameraManager?.session.startRunning()
+        }
         scheduleDetection()
+    }
+    
+    private func stopDetection() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak cameraManager] in
+            cameraManager?.session.stopRunning()
+        }
     }
     
     private func startCapturing() {
@@ -204,6 +233,10 @@ struct CameraView: View {
     }
     
     private func performDetection() async {
+        guard isActive else {
+            return
+        }
+        
         guard let image = cameraManager.captureFrame() else {
             return
         }
@@ -278,17 +311,23 @@ struct CameraView: View {
                     lastSavedClassCounts = currentClassCounts
                     
                     let imageData = image.jpegData(compressionQuality: 0.8)
+                    let imageWidth = Int(image.size.width)
+                    let imageHeight = Int(image.size.height)
+                    
                     let frame = CapturedFrame(
                         timestamp: now,
                         detections: detections,
-                        imageData: imageData
+                        imageData: imageData,
+                        imageWidth: imageWidth,
+                        imageHeight: imageHeight
                     )
                     
                     frameStorage.addFrame(frame)
                     captureCount = frameStorage.frames.count
                     
                     if let reason = saveReason {
-                        print("🔵 [ScoutCapture] saved: reason=\(reason)")
+                        let orientation = imageWidth < imageHeight ? "portrait" : "landscape"
+                        print("🔵 [ScoutCapture] saved: reason=\(reason), \(imageWidth)×\(imageHeight) orientation=\(orientation)")
                     }
                 }
             }
@@ -300,6 +339,8 @@ struct CameraView: View {
     }
     
     private func fireHapticIfReady() {
+        guard isActive else { return }
+        
         let now = Date()
         guard now >= hapticCooldownUntil else { return }
         
@@ -411,6 +452,7 @@ class CameraManager: NSObject, ObservableObject {
     private let ciContext = CIContext()
     private var didLogFrameOrientation = false
     var previewLayer: AVCaptureVideoPreviewLayer?
+    var isActive: Bool = true
     
     func checkPermissions() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -500,6 +542,10 @@ class CameraManager: NSObject, ObservableObject {
 
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard isActive else {
+            return
+        }
+        
         guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             return
         }

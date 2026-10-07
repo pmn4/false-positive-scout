@@ -13,7 +13,10 @@ struct ContentView: View {
     
     var body: some View {
         TabView(selection: $selectedTab) {
-            CameraView()
+            CameraView(isActive: Binding(
+                get: { selectedTab == 0 },
+                set: { _ in }
+            ))
                 .tabItem {
                     Label("Scout", systemImage: "camera.fill")
                 }

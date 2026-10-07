@@ -19,6 +19,10 @@ struct FrameReviewView: View {
         frameStorage.frames.filter { $0.reviewed && $0.kept }.count
     }
     
+    private var legacyFramesCount: Int {
+        frameStorage.frames.filter { $0.isLegacy }.count
+    }
+    
     var body: some View {
         NavigationView {
             ZStack {
@@ -44,7 +48,14 @@ struct FrameReviewView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    if !frameStorage.frames.isEmpty && unreviewedFrames.isEmpty {
+                    if legacyFramesCount > 0 {
+                        Button(action: {
+                            clearLegacyFrames()
+                        }) {
+                            Label("Clear \(legacyFramesCount) old", systemImage: "trash")
+                                .font(.caption)
+                        }
+                    } else if !frameStorage.frames.isEmpty && unreviewedFrames.isEmpty {
                         Button(action: {
                             showingExportSheet = true
                         }) {
@@ -217,6 +228,13 @@ struct FrameReviewView: View {
             
         case .delete, .toggleKeep:
             break
+        }
+    }
+    
+    private func clearLegacyFrames() {
+        let legacyFrames = frameStorage.frames.filter { $0.isLegacy }
+        for frame in legacyFrames {
+            frameStorage.deleteFrame(frame)
         }
     }
 }

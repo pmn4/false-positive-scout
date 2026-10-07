@@ -27,8 +27,10 @@ struct CapturedFrame: Identifiable, Codable {
     var kept: Bool
     var reviewed: Bool
     var uploadedImageId: String?
+    var imageWidth: Int?
+    var imageHeight: Int?
     
-    init(id: UUID = UUID(), timestamp: Date = Date(), detections: [Detection], imageData: Data?, kept: Bool = true, reviewed: Bool = false, uploadedImageId: String? = nil) {
+    init(id: UUID = UUID(), timestamp: Date = Date(), detections: [Detection], imageData: Data?, kept: Bool = true, reviewed: Bool = false, uploadedImageId: String? = nil, imageWidth: Int? = nil, imageHeight: Int? = nil) {
         self.id = id
         self.timestamp = timestamp
         self.detections = detections
@@ -36,6 +38,8 @@ struct CapturedFrame: Identifiable, Codable {
         self.kept = kept
         self.reviewed = reviewed
         self.uploadedImageId = uploadedImageId
+        self.imageWidth = imageWidth
+        self.imageHeight = imageHeight
     }
     
     init(from decoder: Decoder) throws {
@@ -47,10 +51,16 @@ struct CapturedFrame: Identifiable, Codable {
         kept = try container.decode(Bool.self, forKey: .kept)
         reviewed = try container.decodeIfPresent(Bool.self, forKey: .reviewed) ?? false
         uploadedImageId = try container.decodeIfPresent(String.self, forKey: .uploadedImageId)
+        imageWidth = try container.decodeIfPresent(Int.self, forKey: .imageWidth)
+        imageHeight = try container.decodeIfPresent(Int.self, forKey: .imageHeight)
+    }
+    
+    var isLegacy: Bool {
+        imageWidth == nil || imageHeight == nil
     }
     
     enum CodingKeys: String, CodingKey {
-        case id, timestamp, detections, imageData, kept, reviewed, uploadedImageId
+        case id, timestamp, detections, imageData, kept, reviewed, uploadedImageId, imageWidth, imageHeight
     }
 }
 
@@ -141,7 +151,9 @@ class FrameStorage: ObservableObject {
                 imageData: nil,
                 kept: frame.kept,
                 reviewed: frame.reviewed,
-                uploadedImageId: frame.uploadedImageId
+                uploadedImageId: frame.uploadedImageId,
+                imageWidth: frame.imageWidth,
+                imageHeight: frame.imageHeight
             )
         }
         
@@ -177,7 +189,9 @@ class FrameStorage: ObservableObject {
                 imageData: imageData,
                 kept: frame.kept,
                 reviewed: frame.reviewed,
-                uploadedImageId: frame.uploadedImageId
+                uploadedImageId: frame.uploadedImageId,
+                imageWidth: frame.imageWidth,
+                imageHeight: frame.imageHeight
             )
         }
     }
