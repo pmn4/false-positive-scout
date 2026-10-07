@@ -29,8 +29,11 @@ struct CapturedFrame: Identifiable, Codable {
     var uploadedImageId: String?
     var imageWidth: Int?
     var imageHeight: Int?
+    /// Full Roboflow `workspace/project` id of the model that produced this capture.
+    var modelProject: String?
+    var modelVersion: Int?
     
-    init(id: UUID = UUID(), timestamp: Date = Date(), detections: [Detection], imageData: Data?, kept: Bool = true, reviewed: Bool = false, uploadedImageId: String? = nil, imageWidth: Int? = nil, imageHeight: Int? = nil) {
+    init(id: UUID = UUID(), timestamp: Date = Date(), detections: [Detection], imageData: Data?, kept: Bool = true, reviewed: Bool = false, uploadedImageId: String? = nil, imageWidth: Int? = nil, imageHeight: Int? = nil, modelProject: String? = nil, modelVersion: Int? = nil) {
         self.id = id
         self.timestamp = timestamp
         self.detections = detections
@@ -40,6 +43,8 @@ struct CapturedFrame: Identifiable, Codable {
         self.uploadedImageId = uploadedImageId
         self.imageWidth = imageWidth
         self.imageHeight = imageHeight
+        self.modelProject = modelProject
+        self.modelVersion = modelVersion
     }
     
     init(from decoder: Decoder) throws {
@@ -53,6 +58,8 @@ struct CapturedFrame: Identifiable, Codable {
         uploadedImageId = try container.decodeIfPresent(String.self, forKey: .uploadedImageId)
         imageWidth = try container.decodeIfPresent(Int.self, forKey: .imageWidth)
         imageHeight = try container.decodeIfPresent(Int.self, forKey: .imageHeight)
+        modelProject = try container.decodeIfPresent(String.self, forKey: .modelProject)
+        modelVersion = try container.decodeIfPresent(Int.self, forKey: .modelVersion)
     }
     
     var isLegacy: Bool {
@@ -60,7 +67,7 @@ struct CapturedFrame: Identifiable, Codable {
     }
     
     enum CodingKeys: String, CodingKey {
-        case id, timestamp, detections, imageData, kept, reviewed, uploadedImageId, imageWidth, imageHeight
+        case id, timestamp, detections, imageData, kept, reviewed, uploadedImageId, imageWidth, imageHeight, modelProject, modelVersion
     }
 }
 
@@ -153,7 +160,9 @@ class FrameStorage: ObservableObject {
                 reviewed: frame.reviewed,
                 uploadedImageId: frame.uploadedImageId,
                 imageWidth: frame.imageWidth,
-                imageHeight: frame.imageHeight
+                imageHeight: frame.imageHeight,
+                modelProject: frame.modelProject,
+                modelVersion: frame.modelVersion
             )
         }
         
@@ -191,7 +200,9 @@ class FrameStorage: ObservableObject {
                 reviewed: frame.reviewed,
                 uploadedImageId: frame.uploadedImageId,
                 imageWidth: frame.imageWidth,
-                imageHeight: frame.imageHeight
+                imageHeight: frame.imageHeight,
+                modelProject: frame.modelProject,
+                modelVersion: frame.modelVersion
             )
         }
     }

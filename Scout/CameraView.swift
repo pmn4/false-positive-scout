@@ -314,12 +314,36 @@ struct CameraView: View {
                     let imageWidth = Int(image.size.width)
                     let imageHeight = Int(image.size.height)
                     
+                    // Persist the model that ran this inference (full workspace/project + version).
+                    let captureModelProject: String? = {
+                        if let project = modelManager.loadedProject, !project.isEmpty {
+                            if project.contains("/") {
+                                return project
+                            }
+                            if let workspace = modelManager.loadedWorkspace, !workspace.isEmpty {
+                                return "\(workspace)/\(project)"
+                            }
+                            return project
+                        }
+                        let stored = UserDefaults.standard.string(forKey: "scout_model_project") ?? ""
+                        return stored.isEmpty ? nil : stored
+                    }()
+                    let captureModelVersion: Int? = {
+                        let raw = modelManager.loadedVersion
+                            ?? UserDefaults.standard.string(forKey: "scout_model_version")
+                        guard let raw = raw, !raw.isEmpty else { return nil }
+                        let num = raw.split(separator: "/").last.map(String.init) ?? raw
+                        return Int(num)
+                    }()
+                    
                     let frame = CapturedFrame(
                         timestamp: now,
                         detections: detections,
                         imageData: imageData,
                         imageWidth: imageWidth,
-                        imageHeight: imageHeight
+                        imageHeight: imageHeight,
+                        modelProject: captureModelProject,
+                        modelVersion: captureModelVersion
                     )
                     
                     frameStorage.addFrame(frame)
@@ -327,7 +351,9 @@ struct CameraView: View {
                     
                     if let reason = saveReason {
                         let orientation = imageWidth < imageHeight ? "portrait" : "landscape"
-                        print("🔵 [ScoutCapture] saved: reason=\(reason), \(imageWidth)×\(imageHeight) orientation=\(orientation)")
+                        let projectLog = captureModelProject ?? "unknown"
+                        let versionLog = captureModelVersion.map(String.init) ?? "?"
+                        print("🔵 [ScoutCapture] saved: reason=\(reason), \(imageWidth)×\(imageHeight) orientation=\(orientation), model=\(projectLog) v\(versionLog)")
                     }
                 }
             }

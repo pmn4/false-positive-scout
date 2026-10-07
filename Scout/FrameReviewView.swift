@@ -330,6 +330,15 @@ struct SwipeCard: View {
                         .frame(width: size.width, height: size.height)
                         .clipShape(RoundedRectangle(cornerRadius: 16))
                         .shadow(color: .black.opacity(0.2), radius: index == 0 ? 12 : 6, x: 0, y: 4)
+                        
+                        if let modelProject = frame.modelProject {
+                            let slug = modelProject.split(separator: "/").last.map(String.init) ?? modelProject
+                            let versionText = frame.modelVersion.map { " v\($0)" } ?? ""
+                            Text("\(slug)\(versionText)")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .padding(.top, 6)
+                        }
                     }
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .center)
                     .offset(x: index == 0 ? offset.width : 0, y: index == 0 ? offset.height : CGFloat(index) * 12)
@@ -454,14 +463,8 @@ struct ExportSheet: View {
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var frameStorage: FrameStorage
     @ObservedObject var oauthManager = OAuthManager.shared
-    /// Upload target project (workspace/project). New key ignores stale `scout_project` values.
-    @AppStorage("scout_upload_project") private var uploadProject: String = ""
-    @AppStorage("scout_model_project") private var modelProject: String = ""
-    @AppStorage("scout_model_workspace") private var modelWorkspace: String = ""
+    @AppStorage("scout_model_project") private var selectedModelProject: String = ""
     @State private var apiKey: String = ""
-    @State private var availableProjects: [Project] = []
-    @State private var isLoadingProjects = false
-    @State private var projectsLoadError: String?
     
     struct PartialSuccess: Identifiable {
         let id = UUID()
@@ -469,6 +472,7 @@ struct ExportSheet: View {
         let imageId: String
         let imageName: String
         let image: UIImage
+        let project: String
     }
     
     @State private var isUploading = false
@@ -480,13 +484,49 @@ struct ExportSheet: View {
     @State private var partialSuccesses: [PartialSuccess] = []
     @State private var isRetrying = false
     @State private var currentBatchName: String = ""
+    @State private var projectsByWorkspace: [String: [Project]] = [:]
+    @State private var isValidatingProjects = false
     
     private var canAuthenticate: Bool {
         oauthManager.isAuthenticated || !apiKey.isEmpty
     }
     
     private var canUpload: Bool {
-        canAuthenticate && !uploadProject.isEmpty && !isLoadingProjects
+        canAuthenticate && !isValidatingProjects && !frames.isEmpty
+    }
+    
+    private func targetProject(for frame: CapturedFrame) -> String? {
+        if let project = frame.modelProject, !project.isEmpty {
+            return project
+        }
+        if !selectedModelProject.isEmpty {
+            return selectedModelProject
+        }
+        return nil
+    }
+    
+    private func projectSlug(_ projectId: String) -> String {
+        projectId.split(separator: "/").last.map(String.init) ?? projectId
+    }
+    
+    private func workspaceSlug(from projectId: String) -> String? {
+        guard projectId.contains("/") else { return nil }
+        return String(projectId.split(separator: "/").first!)
+    }
+    
+    private var uploadTargetSummary: String {
+        var counts: [String: Int] = [:]
+        for frame in frames {
+            let key = targetProject(for: frame).map(projectSlug) ?? "(unknown project)"
+            counts[key, default: 0] += 1
+        }
+        let parts = counts.sorted { $0.key < $1.key }.map { slug, count in
+            "\(count) frame\(count == 1 ? "" : "s") to \(slug)"
+        }
+        if parts.count == 1 {
+            return "Uploading \(parts[0])"
+        }
+        return "Uploading " + parts.joined(separator: ", ")
     }
     
     var body: some View {
@@ -567,6 +607,12 @@ struct ExportSheet: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
                     
+                    Text(uploadTargetSummary)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    
                     if let progress = uploadProgress {
                         VStack(spacing: 12) {
                             ProgressView(value: progress.percentage) {
@@ -591,46 +637,8 @@ struct ExportSheet: View {
                             .padding(.horizontal)
                     }
                     
-                    if isLoadingProjects {
-                        ProgressView("Loading projects...")
-                            .padding(.horizontal)
-                    } else if !availableProjects.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Upload Project")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                            Picker("Upload Project", selection: $uploadProject) {
-                                Text("Select a project").tag("")
-                                ForEach(availableProjects) { proj in
-                                    Text(proj.name).tag(proj.id)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            
-                            if !uploadProject.isEmpty {
-                                Text("Null frames will upload to: \(uploadProject)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal)
-                    } else if let loadError = projectsLoadError {
-                        Text(loadError)
-                            .font(.caption)
-                            .foregroundColor(.red)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                    }
-                    
                     if !canAuthenticate {
                         Text("⚠️ Sign in with Roboflow OR configure API key in Settings")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                    } else if uploadProject.isEmpty && !isLoadingProjects {
-                        Text("⚠️ Select a Roboflow project to upload to")
                             .font(.caption)
                             .foregroundColor(.orange)
                             .multilineTextAlignment(.center)
@@ -667,86 +675,42 @@ struct ExportSheet: View {
         }
         .onAppear {
             apiKey = KeychainHelper.loadAPIKey() ?? ""
-            loadUploadProjects()
-        }
-        .onChange(of: oauthManager.isAuthenticated) { _ in
-            loadUploadProjects()
         }
     }
     
-    private func resolvedWorkspace() -> String? {
-        if !modelWorkspace.isEmpty {
-            return modelWorkspace
+    private func projectsContain(_ list: [Project], projectId: String) -> Bool {
+        let slug = projectSlug(projectId)
+        return list.contains { project in
+            project.id == projectId || project.id == slug || project.id.hasSuffix("/\(slug)")
         }
-        if modelProject.contains("/") {
-            return String(modelProject.split(separator: "/").first!)
-        }
-        if uploadProject.contains("/") {
-            return String(uploadProject.split(separator: "/").first!)
-        }
-        return nil
     }
     
-    private func loadUploadProjects() {
-        guard canAuthenticate else {
-            availableProjects = []
-            projectsLoadError = nil
-            return
-        }
-        guard let workspace = resolvedWorkspace() else {
-            availableProjects = []
-            projectsLoadError = "No model workspace configured. Select a model in Settings first."
-            return
+    private func loadProjectsIfNeeded(for projectId: String) async throws -> [Project] {
+        guard let workspace = workspaceSlug(from: projectId) else {
+            throw RoboflowError.apiError(
+                statusCode: 0,
+                message: "Project \"\(projectId)\" is missing a workspace prefix (expected workspace/project)."
+            )
         }
         
-        isLoadingProjects = true
-        projectsLoadError = nil
-        
-        Task {
-            do {
-                let loaded = try await RoboflowService.shared.listProjects(
-                    workspace: workspace,
-                    apiKey: apiKey.isEmpty ? nil : apiKey
-                )
-                await MainActor.run {
-                    availableProjects = loaded
-                    isLoadingProjects = false
-                    
-                    // Prefer saved upload project if still valid; else selected model project; else clear.
-                    if loaded.contains(where: { $0.id == uploadProject }) {
-                        // keep current selection
-                    } else if let modelMatch = loaded.first(where: { $0.id == modelProject }) {
-                        uploadProject = modelMatch.id
-                    } else if let slug = modelProject.split(separator: "/").last.map(String.init),
-                              let modelMatch = loaded.first(where: {
-                                  $0.id == slug || $0.id.hasSuffix("/\(slug)")
-                              }) {
-                        uploadProject = modelMatch.id
-                    } else {
-                        uploadProject = ""
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    availableProjects = []
-                    isLoadingProjects = false
-                    projectsLoadError = "Failed to load projects: \(error.localizedDescription)"
-                }
-            }
+        let cached = await MainActor.run { projectsByWorkspace[workspace] }
+        if let cached {
+            return cached
         }
+        
+        let loaded = try await RoboflowService.shared.listProjects(
+            workspace: workspace,
+            apiKey: apiKey.isEmpty ? nil : apiKey
+        )
+        await MainActor.run {
+            projectsByWorkspace[workspace] = loaded
+        }
+        return loaded
     }
     
     private func uploadFrames() {
         guard canAuthenticate else {
             errorMessage = "Please sign in with Roboflow OR configure an API key in Settings"
-            return
-        }
-        guard !uploadProject.isEmpty else {
-            errorMessage = "Select a Roboflow project to upload to"
-            return
-        }
-        guard availableProjects.contains(where: { $0.id == uploadProject }) else {
-            errorMessage = "Project \"\(uploadProject)\" is not in your Roboflow workspace. Choose a valid project from the list."
             return
         }
         
@@ -766,6 +730,32 @@ struct ExportSheet: View {
                       let image = UIImage(data: imageData) else {
                     await MainActor.run {
                         failureCount += 1
+                        errorMessage = "Frame missing image data"
+                    }
+                    continue
+                }
+                
+                guard let project = targetProject(for: frame) else {
+                    await MainActor.run {
+                        failureCount += 1
+                        errorMessage = "Frame has no model project. Re-capture with a model loaded, or select a model in Settings for legacy frames."
+                    }
+                    continue
+                }
+                
+                do {
+                    let projects = try await loadProjectsIfNeeded(for: project)
+                    guard projectsContain(projects, projectId: project) else {
+                        await MainActor.run {
+                            failureCount += 1
+                            errorMessage = "Project \"\(project)\" is not in your Roboflow workspace. Skipping frame."
+                        }
+                        continue
+                    }
+                } catch {
+                    await MainActor.run {
+                        failureCount += 1
+                        errorMessage = "Could not verify project \"\(project)\": \(error.localizedDescription)"
                     }
                     continue
                 }
@@ -776,7 +766,7 @@ struct ExportSheet: View {
                     uploadProgress = UploadProgress(
                         current: index + 1,
                         total: frames.count,
-                        currentImageName: imageName
+                        currentImageName: "\(projectSlug(project)) · \(imageName)"
                     )
                 }
                 
@@ -785,9 +775,9 @@ struct ExportSheet: View {
                         try await RoboflowService.shared.annotateAsNull(
                             imageId: existingImageId,
                             imageName: imageName,
-                            imageWidth: Int(image.size.width),
-                            imageHeight: Int(image.size.height),
-                            project: uploadProject,
+                            imageWidth: frame.imageWidth ?? Int(image.size.width),
+                            imageHeight: frame.imageHeight ?? Int(image.size.height),
+                            project: project,
                             apiKey: apiKey.isEmpty ? nil : apiKey
                         )
                         
@@ -801,7 +791,8 @@ struct ExportSheet: View {
                                 frameId: frame.id,
                                 imageId: existingImageId,
                                 imageName: imageName,
-                                image: image
+                                image: image,
+                                project: project
                             ))
                             errorMessage = error.localizedDescription
                         }
@@ -811,7 +802,7 @@ struct ExportSheet: View {
                         let imageId = try await RoboflowService.shared.uploadImage(
                             image: image,
                             imageName: imageName,
-                            project: uploadProject,
+                            project: project,
                             tag: RoboflowService.defaultUploadTag,
                             batchName: currentBatchName,
                             apiKey: apiKey.isEmpty ? nil : apiKey
@@ -825,9 +816,9 @@ struct ExportSheet: View {
                             try await RoboflowService.shared.annotateAsNull(
                                 imageId: imageId,
                                 imageName: imageName,
-                                imageWidth: Int(image.size.width),
-                                imageHeight: Int(image.size.height),
-                                project: uploadProject,
+                                imageWidth: frame.imageWidth ?? Int(image.size.width),
+                                imageHeight: frame.imageHeight ?? Int(image.size.height),
+                                project: project,
                                 apiKey: apiKey.isEmpty ? nil : apiKey
                             )
                             
@@ -841,7 +832,8 @@ struct ExportSheet: View {
                                     frameId: frame.id,
                                     imageId: imageId,
                                     imageName: imageName,
-                                    image: image
+                                    image: image,
+                                    project: project
                                 ))
                                 errorMessage = error.localizedDescription
                             }
@@ -883,7 +875,7 @@ struct ExportSheet: View {
                         imageName: partial.imageName,
                         imageWidth: Int(partial.image.size.width),
                         imageHeight: Int(partial.image.size.height),
-                        project: uploadProject,
+                        project: partial.project,
                         apiKey: apiKey.isEmpty ? nil : apiKey
                     )
                     
@@ -912,6 +904,7 @@ struct ExportSheet: View {
         }
     }
 }
+
 
 #Preview {
     FrameReviewView()
