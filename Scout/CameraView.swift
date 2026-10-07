@@ -30,19 +30,23 @@ struct CameraView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                CameraPreview(session: cameraManager.session)
+                CameraPreview(session: cameraManager.session, cameraManager: cameraManager)
                     .edgesIgnoringSafeArea(.all)
                 
                 if isLoadingModel {
                     LoadingModelOverlay()
+                        .ignoresSafeArea()
                 } else if modelManager.currentModel == nil {
                     NoModelOverlay(showModelPicker: $showModelPicker)
+                        .ignoresSafeArea()
                 } else {
                     DetectionOverlay(
                         detections: currentDetections,
                         imageSize: cameraManager.latestFrameSize,
-                        classColors: modelManager.classColors
+                        classColors: modelManager.classColors,
+                        previewLayer: cameraManager.previewLayer
                     )
+                    .ignoresSafeArea()
                 }
                 
                 VStack {
@@ -379,6 +383,7 @@ class CameraManager: NSObject, ObservableObject {
     @Published var latestFrameSize: CGSize = .zero
     private let ciContext = CIContext()
     private var didLogFrameOrientation = false
+    var previewLayer: AVCaptureVideoPreviewLayer?
     
     func checkPermissions() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -496,6 +501,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
+    let cameraManager: CameraManager
     
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
@@ -504,6 +510,7 @@ struct CameraPreview: UIViewRepresentable {
         view.layer.addSublayer(previewLayer)
         
         context.coordinator.previewLayer = previewLayer
+        cameraManager.previewLayer = previewLayer
         
         return view
     }
@@ -640,6 +647,7 @@ struct DetectionOverlay: View {
     let detections: [Detection]
     let imageSize: CGSize
     let classColors: [String: String]
+    let previewLayer: AVCaptureVideoPreviewLayer?
     
     @State private var lastLogTime: Date = Date.distantPast
     
@@ -652,7 +660,8 @@ struct DetectionOverlay: View {
                 if now.timeIntervalSince(lastLogTime) > 1.0 {
                     DispatchQueue.main.async {
                         lastLogTime = now
-                        print("🔵 [ScoutDetect] Overlay: imageSize=\(Int(imageSize.width))×\(Int(imageSize.height)), viewSize=\(Int(viewSize.width))×\(Int(viewSize.height)), dets=\(detections.count)")
+                        let previewBounds = previewLayer?.bounds ?? .zero
+                        print("🔵 [ScoutDetect] Overlay: imageSize=\(Int(imageSize.width))×\(Int(imageSize.height)), viewSize=\(Int(viewSize.width))×\(Int(viewSize.height)), previewBounds=\(Int(previewBounds.width))×\(Int(previewBounds.height)), dets=\(detections.count)")
                     }
                 }
             }()
