@@ -10,6 +10,7 @@ struct FrameReviewView: View {
     @State private var showingExportSheet = false
     @State private var topCardOffset: CGSize = .zero
     @State private var isAnimatingButton = false
+    @State private var showingClearLegacyAlert = false
     
     private var unreviewedFrames: [CapturedFrame] {
         frameStorage.frames.filter { !$0.reviewed }
@@ -50,7 +51,7 @@ struct FrameReviewView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if legacyFramesCount > 0 {
                         Button(action: {
-                            clearLegacyFrames()
+                            showingClearLegacyAlert = true
                         }) {
                             Label("Clear \(legacyFramesCount) old", systemImage: "trash")
                                 .font(.caption)
@@ -67,6 +68,14 @@ struct FrameReviewView: View {
             }
             .sheet(isPresented: $showingExportSheet) {
                 ExportSheet(frames: frameStorage.exportKeptFrames())
+            }
+            .alert("Clear Old Captures", isPresented: $showingClearLegacyAlert) {
+                Button("Cancel", role: .cancel) { }
+                Button("Clear \(legacyFramesCount)", role: .destructive) {
+                    clearLegacyFrames()
+                }
+            } message: {
+                Text("Delete \(legacyFramesCount) captures saved before image dimensions were tracked? This cannot be undone.")
             }
         }
     }
@@ -424,7 +433,6 @@ struct SwipeCard: View {
                         }
                     }
             )
-        }
     }
     
     private func flyOffScreen(direction: SwipeDirection, geometry: GeometryProxy) {
