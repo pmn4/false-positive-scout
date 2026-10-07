@@ -482,6 +482,51 @@ class ModelManager: ObservableObject {
         }
     }
     
+    private func fetchCoreMLClasses(
+        workspace: String,
+        project: String,
+        version: String,
+        apiKey: String?
+    ) async throws -> [String] {
+        var coremlURL = URL(string: "https://api.roboflow.com/coreml/\(project)/\(version)")!
+        var components = URLComponents(url: coremlURL, resolvingAgainstBaseURL: false)!
+        
+        var queryItems: [URLQueryItem] = []
+        
+        if let key = apiKey, !key.isEmpty {
+            queryItems.append(URLQueryItem(name: "api_key", value: key))
+        }
+        
+        components.queryItems = queryItems
+        coremlURL = components.url!
+        
+        var request = URLRequest(url: coremlURL)
+        
+        if !(apiKey?.isEmpty ?? true) {
+        } else if OAuthManager.shared.isAuthenticated {
+            let accessToken = try await OAuthManager.shared.getAccessToken()
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            print("🟡 [ScoutDetect] fetchCoreMLClasses failed: HTTP \(code)")
+            return []
+        }
+        
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let coremlDict = json["coreml"] as? [String: Any],
+              let classes = coremlDict["classes"] as? [String] else {
+            print("🟡 [ScoutDetect] fetchCoreMLClasses: no coreml.classes in response")
+            return []
+        }
+        
+        print("🔵 [ScoutDetect] fetchCoreMLClasses: \(workspace)/\(project)/\(version) → \(classes.count) classes")
+        return classes
+    }
+    
     private func fetchProjectMetadata(
         workspace: String,
         project: String,
@@ -522,10 +567,6 @@ class ModelManager: ObservableObject {
         if let project = json["project"] as? [String: Any] {
             if let colors = project["colors"] as? [String: String] {
                 classColors = colors
-            }
-            
-            if let classesDict = project["classes"] as? [String: Any] {
-                classNames = classesDict.keys.sorted()
             }
         }
         
@@ -791,6 +832,7 @@ class ModelManager: ObservableObject {
     private func finishLoadingModel(_ mlModel: MLModel, backend: InferenceBackend, workspace: String, project: String, version: String) async throws {
         let vnModel = try VNCoreMLModel(for: mlModel)
         var extractedLabels = extractClassLabels(from: mlModel)
+        var labelSource = "Core ML metadata"
         
         let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
         let versionNum = version.split(separator: "/").last.map(String.init) ?? version
@@ -805,7 +847,25 @@ class ModelManager: ObservableObject {
            let classData = UserDefaults.standard.data(forKey: "scout_model_classes_v2_\(workspace)_\(projectSlug)_\(versionNum)"),
            let classNames = try? JSONDecoder().decode([String].self, from: classData) {
             extractedLabels = classNames
+            labelSource = "/coreml (cached)"
             print("🔵 [ScoutDetect] Loaded classes from cache v2: \(classNames.count) entries")
+        }
+        
+        if extractedLabels.isEmpty {
+            let apiKey = KeychainHelper.loadAPIKey()
+            if let fetchedClasses = try? await fetchCoreMLClasses(
+                workspace: workspace,
+                project: projectSlug,
+                version: versionNum,
+                apiKey: apiKey
+            ), !fetchedClasses.isEmpty {
+                extractedLabels = fetchedClasses
+                labelSource = "/coreml (refetch)"
+                if let classData = try? JSONEncoder().encode(fetchedClasses) {
+                    UserDefaults.standard.set(classData, forKey: "scout_model_classes_v2_\(workspace)_\(projectSlug)_\(versionNum)")
+                }
+                print("🔵 [ScoutDetect] Refetched classes from /coreml: \(fetchedClasses.count) entries")
+            }
         }
         
         var colors: [String: String] = [:]
@@ -869,7 +929,7 @@ class ModelManager: ObservableObject {
             self.loadedVersion = version
             
             print("🔵 [ScoutDetect] ResizeMode: \(preprocessMode == .stretch ? "Stretch" : preprocessMode == .letterbox ? "Letterbox" : "CenterCrop")")
-            print("🔵 [ScoutDetect] Label source: /coreml endpoint classes array")
+            print("🔵 [ScoutDetect] Label source: \(labelSource)")
             print("🔵 [ScoutDetect] Full index→name: [\(extractedLabels.enumerated().map { "\($0):\($1.isEmpty ? "—" : $1)" }.joined(separator: ", "))]")
             print("🔵 [ScoutDetect] Colors: \(colors.count) classes with colors")
         }
@@ -892,7 +952,17 @@ class ModelManager: ObservableObject {
     private func extractClassLabels(from model: MLModel) -> [String] {
         let description = model.modelDescription
         
+        let outputNames = Set(description.outputDescriptionsByName.keys.map { $0.lowercased() })
+        let isRFDetr = outputNames.contains("boxes") && outputNames.contains("scores") && outputNames.contains("labels")
+        
         if let classLabels = description.classLabels as? [String] {
+            if isRFDetr {
+                let hasBackground = !classLabels.isEmpty && classLabels[0].lowercased().contains("background")
+                if !hasBackground {
+                    print("🔵 [ScoutDetect] Ignoring Core ML classLabels (RF-DETR without background slot)")
+                    return []
+                }
+            }
             return classLabels
         }
         
@@ -900,6 +970,13 @@ class ModelManager: ObservableObject {
             for key in ["classes", "names", "class_labels"] {
                 if let value = metadata[key] {
                     if let parsed = parseClassLabelsFromString(value) {
+                        if isRFDetr {
+                            let hasBackground = !parsed.isEmpty && parsed[0].lowercased().contains("background")
+                            if !hasBackground {
+                                print("🔵 [ScoutDetect] Ignoring Core ML metadata classLabels (RF-DETR without background slot)")
+                                return []
+                            }
+                        }
                         return parsed
                     }
                 }
@@ -911,6 +988,13 @@ class ModelManager: ObservableObject {
                 for key in ["classes", "names", "class_labels"] {
                     if metadataKey.rawValue.lowercased().contains(key) {
                         if let parsed = parseClassLabelsFromString(stringValue) {
+                            if isRFDetr {
+                                let hasBackground = !parsed.isEmpty && parsed[0].lowercased().contains("background")
+                                if !hasBackground {
+                                    print("🔵 [ScoutDetect] Ignoring Core ML metadata classLabels (RF-DETR without background slot)")
+                                    return []
+                                }
+                            }
                             return parsed
                         }
                     }
@@ -922,6 +1006,13 @@ class ModelManager: ObservableObject {
             for key in ["classes", "names", "class_labels"] {
                 if let value = userDefined[key] {
                     if let parsed = parseClassLabelsFromString(value) {
+                        if isRFDetr {
+                            let hasBackground = !parsed.isEmpty && parsed[0].lowercased().contains("background")
+                            if !hasBackground {
+                                print("🔵 [ScoutDetect] Ignoring Core ML metadata classLabels (RF-DETR without background slot)")
+                                return []
+                            }
+                        }
                         return parsed
                     }
                 }
