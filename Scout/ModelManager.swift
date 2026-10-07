@@ -321,7 +321,13 @@ class ModelManager: ObservableObject {
         
         var preprocessInfo = extractPreprocessingInfo(from: json)
         
-        let (classNames, classColors) = try await fetchProjectMetadata(
+        var classNames: [String] = []
+        if let coremlClasses = coremlDict["classes"] as? [String] {
+            classNames = coremlClasses
+            print("🔵 [ScoutDetect] /coreml endpoint classes[\(coremlClasses.count)]: \(coremlClasses.joined(separator: ", "))")
+        }
+        
+        let (_, classColors) = try await fetchProjectMetadata(
             workspace: workspace,
             project: projectSlug,
             version: versionNum,
@@ -458,7 +464,7 @@ class ModelManager: ObservableObject {
         
         if !classNames.isEmpty {
             if let classData = try? JSONEncoder().encode(classNames) {
-                UserDefaults.standard.set(classData, forKey: "scout_model_classes_\(workspace)_\(projectSlug)_\(versionNum)")
+                UserDefaults.standard.set(classData, forKey: "scout_model_classes_v2_\(workspace)_\(projectSlug)_\(versionNum)")
             }
         }
         
@@ -796,9 +802,10 @@ class ModelManager: ObservableObject {
         print("🔵 [ScoutDetect] Backend: \(backend == .rfDetrTensors ? "RF-DETR" : "Vision/YOLO")")
         
         if extractedLabels.isEmpty,
-           let classData = UserDefaults.standard.data(forKey: "scout_model_classes_\(workspace)_\(projectSlug)_\(versionNum)"),
+           let classData = UserDefaults.standard.data(forKey: "scout_model_classes_v2_\(workspace)_\(projectSlug)_\(versionNum)"),
            let classNames = try? JSONDecoder().decode([String].self, from: classData) {
             extractedLabels = classNames
+            print("🔵 [ScoutDetect] Loaded classes from cache v2: \(classNames.count) entries")
         }
         
         var colors: [String: String] = [:]
@@ -807,22 +814,15 @@ class ModelManager: ObservableObject {
             colors = colorMap
         }
         
-        if extractedLabels.isEmpty || colors.isEmpty {
+        if colors.isEmpty {
             let apiKey = KeychainHelper.loadAPIKey()
-            if let (fetchedNames, fetchedColors) = try? await fetchProjectMetadata(
+            if let (_, fetchedColors) = try? await fetchProjectMetadata(
                 workspace: workspace,
                 project: projectSlug,
                 version: versionNum,
                 apiKey: apiKey
             ) {
-                if extractedLabels.isEmpty && !fetchedNames.isEmpty {
-                    extractedLabels = fetchedNames
-                    if let classData = try? JSONEncoder().encode(fetchedNames) {
-                        UserDefaults.standard.set(classData, forKey: "scout_model_classes_\(workspace)_\(projectSlug)_\(versionNum)")
-                    }
-                }
-                
-                if colors.isEmpty && !fetchedColors.isEmpty {
+                if !fetchedColors.isEmpty {
                     colors = fetchedColors
                     if let colorData = try? JSONEncoder().encode(fetchedColors) {
                         UserDefaults.standard.set(colorData, forKey: "scout_model_colors_\(workspace)_\(projectSlug)_\(versionNum)")
@@ -869,7 +869,8 @@ class ModelManager: ObservableObject {
             self.loadedVersion = version
             
             print("🔵 [ScoutDetect] ResizeMode: \(preprocessMode == .stretch ? "Stretch" : preprocessMode == .letterbox ? "Letterbox" : "CenterCrop")")
-            print("🔵 [ScoutDetect] Classes: \(extractedLabels.count) → [\(extractedLabels.prefix(5).joined(separator: ", "))\(extractedLabels.count > 5 ? "..." : "")]")
+            print("🔵 [ScoutDetect] Label source: /coreml endpoint classes array")
+            print("🔵 [ScoutDetect] Full index→name: [\(extractedLabels.enumerated().map { "\($0):\($1.isEmpty ? "—" : $1)" }.joined(separator: ", "))]")
             print("🔵 [ScoutDetect] Colors: \(colors.count) classes with colors")
         }
     }
@@ -1023,7 +1024,7 @@ class ModelManager: ObservableObject {
             try fileManager.removeItem(at: cacheURL)
         }
         
-        UserDefaults.standard.removeObject(forKey: "scout_model_classes_\(workspace)_\(projectSlug)_\(versionNum)")
+        UserDefaults.standard.removeObject(forKey: "scout_model_classes_v2_\(workspace)_\(projectSlug)_\(versionNum)")
         UserDefaults.standard.removeObject(forKey: "scout_model_colors_\(workspace)_\(projectSlug)_\(versionNum)")
         UserDefaults.standard.removeObject(forKey: "scout_model_preprocessing_\(workspace)_\(projectSlug)_\(versionNum)")
     }
@@ -1479,6 +1480,11 @@ class ModelManager: ObservableObject {
                 if name.isEmpty {
                     className = "unknown"
                     mappingNote = "empty@\(labelIdx)"
+                } else if name.lowercased().starts(with: "background_class") {
+                    if detections.count < 3 {
+                        print("🔵 [ScoutDetect] Skipping background detection: idx=\(labelIdx) name=\"\(name)\"")
+                    }
+                    continue
                 } else {
                     className = name
                     mappingNote = "idx\(labelIdx)"
