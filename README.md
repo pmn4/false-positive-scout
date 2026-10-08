@@ -6,7 +6,7 @@ Hard-negative mining you can do while walking around the house.
 
 There is **no TestFlight or App Store build**. You try Scout by cloning this repo and sideloading with your own Xcode + Apple account.
 
-OAuth / “Sign in with Roboflow” is implemented but **shelved** ([issue #3](https://github.com/pmn4/false-positive-scout/issues/3)); use an API key.
+Auth is **Log in with Roboflow** (OAuth 2.1 + PKCE, public client, no client secret). Access and refresh tokens live in Keychain on device. Paste-credential auth is removed.
 
 ## Requirements
 
@@ -19,15 +19,14 @@ OAuth / “Sign in with Roboflow” is implemented but **shelved** ([issue #3](h
 ## How to try it (sideload)
 
 1. `git clone https://github.com/pmn4/false-positive-scout.git && cd false-positive-scout`
-2. Copy the secret templates (both are **required**; the build fails with a clear error if either is missing):
+2. Copy the required signing template (the build fails with a clear error if it is missing):
    ```bash
    cp Config/Secrets.xcconfig.example Config/Secrets.xcconfig
-   cp Config/Secrets.plist.example Config/Secrets.plist
    ```
 3. Edit `Config/Secrets.xcconfig`: set `DEVELOPMENT_TEAM` to your Team ID and `PRODUCT_BUNDLE_IDENTIFIER` to a **unique** id (e.g. `com.yourname.falsepositivescout`).
-4. Optionally edit `Config/Secrets.plist` for a default API key, OAuth client ID (only if re-enabling OAuth), or default workspace/project. Leave keys empty to configure everything in the app.
+4. Optionally copy `Config/Secrets.plist.example` → `Config/Secrets.plist` for default workspace/project (or an OAuth client ID override). The plist is **optional**.
 5. Open `Scout.xcodeproj` in Xcode, plug in your iPhone, Run.
-6. In **Settings**, paste a Roboflow API key if you did not put one in Secrets.plist (Keychain wins over the plist default). Pick workspace → project → model version; Scout downloads and caches the Core ML package.
+6. In **Settings**, tap **Log in with Roboflow**, approve consent, then pick workspace → project → model version; Scout downloads and caches the Core ML package.
 
 Simulator check (no signing / no camera):
 
@@ -74,10 +73,10 @@ For each kept frame (code paths in `FrameReviewView` / `RoboflowService`):
 | `FrameReviewView.swift` | Swipe deck + Upload & Nullify sheet |
 | `RoboflowService.swift` | REST: list, upload, annotate-as-null |
 | `Models.swift` | `Detection`, `CapturedFrame` (`modelProject` / `modelVersion`) |
-| `SettingsView.swift` | API key (Keychain), model selection |
-| `OAuthConfig.swift` / `OAuthManager.swift` | Shelved OAuth (flagged off); redirect relay `https://pmn4.github.io/false-positive-scout/oauth/callback` |
+| `SettingsView.swift` | Log in / Log out, model selection |
+| `OAuthManager.swift` | ASWebAuthenticationSession + PKCE; tokens in Keychain; refresh + revoke |
 | `ScoutLog.swift` | Decision logs always; per-frame verbose gated |
-| `Config/Scout.xcconfig` + `Secrets.*` | Signing/bundle via gitignored `Secrets.xcconfig`; optional plist defaults |
+| `Config/Scout.xcconfig` + `Secrets.*` | Signing/bundle via required gitignored `Secrets.xcconfig`; optional plist defaults |
 
 ## Roboflow gotchas we learned
 
@@ -88,8 +87,9 @@ For each kept frame (code paths in `FrameReviewView` / `RoboflowService`):
 
 ## Privacy & signing
 
-- API keys stay in Keychain. Do not commit keys, `.env`, or footage of people (especially kids).
-- `Config/Secrets.xcconfig` and `Config/Secrets.plist` are gitignored. Copy the `.example` files; the Xcode build errors out if they are missing.
+- OAuth access/refresh tokens stay in Keychain. Do not commit tokens, `.env`, or footage of people (especially kids).
+- `Config/Secrets.xcconfig` is gitignored and **required** (build fails if missing). `Config/Secrets.plist` is optional.
+- **Caveat:** Roboflow documents open Dynamic Client Registration mainly for MCP clients. Native-app PKCE with `token_endpoint_auth_method: none` works today (verified Oct 2026) but is not officially documented for third-party iOS apps.
 
 ## License
 

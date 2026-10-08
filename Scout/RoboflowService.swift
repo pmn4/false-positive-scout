@@ -2,28 +2,34 @@ import Foundation
 import UIKit
 
 // "I never sleep, 'cause sleep is the cousin of death" - Nas (probably)
-// Service for calling Roboflow inference API
+// Service for Roboflow REST (Bearer OAuth only)
 
 // "Upload progress like I'm on a mission" ~Nas (probably)
-// Progress tracking for bulk operations
 struct UploadProgress {
     var current: Int
     var total: Int
     var currentImageName: String
-    
+    var stage: String
+
     var percentage: Double {
         guard total > 0 else { return 0 }
         return Double(current) / Double(total)
     }
+
+    init(current: Int, total: Int, currentImageName: String, stage: String = "") {
+        self.current = current
+        self.total = total
+        self.currentImageName = currentImageName
+        self.stage = stage
+    }
 }
 
 // "Born alone, die alone, no crew to keep my crown" ~Nas (probably)
-// Workspace and project models for OAuth-based project selection
 struct Workspace: Codable, Identifiable, Hashable {
     let url: String
     let name: String
     let members: Int?
-    
+
     var id: String { url }
 }
 
@@ -33,309 +39,434 @@ struct Project: Codable, Identifiable, Hashable {
     let workspace: String?
 }
 
+/// One JPEG entry destined for a zip upload batch.
+struct ZipUploadEntry {
+    let frameId: UUID
+    let imageName: String
+    let jpegData: Data
+}
+
+struct ZipUploadResult {
+    let imageIds: [UUID: String]
+    let batchId: String?
+    /// Confirmed app.roboflow.com link (batch page when id known, else project Annotate).
+    let openURL: URL
+    let batchName: String
+    let workspace: String
+    let projectSlug: String
+}
+
 class RoboflowService {
     static let shared = RoboflowService()
-    
+
     private init() {}
-    
-    // MARK: - Auth Strategy
-    
-    // Determine auth method: prefer OAuth, fall back to API key
-    enum AuthMethod {
-        case oauth(token: String)
-        case apiKey(key: String)
-        case none
-    }
-    
-    private func getAuthMethod(apiKey: String? = nil) async throws -> AuthMethod {
-        // If OAuth is active (signed in), try it first
-        if OAuthManager.shared.isAuthenticated {
-            do {
-                // Propagate OAuth token failures (will trigger sign out if expired)
-                let token = try await OAuthManager.shared.getAccessToken()
-                return .oauth(token: token)
-            } catch {
-                // Re-check isAuthenticated: getAccessToken may have signedOut on refresh 400/401
-                // If signed out, fall through to API key; if still authenticated (5xx/429), rethrow
-                if !OAuthManager.shared.isAuthenticated {
-                    // Fall through to API key path (self-signOut on expired refresh token)
-                } else {
-                    // Still authenticated: temporary error (5xx, 429), propagate
-                    throw error
-                }
-            }
+
+    static let defaultUploadTag = "scout"
+
+    // MARK: - Workspace & Project Discovery
+
+    func listWorkspaces() async throws -> [Workspace] {
+        let endpoint = "/"
+        let request = URLRequest(url: URL(string: "https://api.roboflow.com/")!)
+        let (data, http) = try await OAuthManager.shared.authorizedData(for: request)
+
+        guard http.statusCode == 200 else {
+            throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data)
         }
-        
-        // Only use API key when NOT signed in with OAuth (or after self-signOut)
-        if let key = apiKey, !key.isEmpty {
-            return .apiKey(key: key)
-        }
-        
-        return .none
-    }
-    
-    // MARK: - Workspace & Project Discovery (OAuth or API key)
-    
-    // List all workspaces accessible to the authenticated user
-    func listWorkspaces(apiKey: String? = nil) async throws -> [Workspace] {
-        let auth = try await getAuthMethod(apiKey: apiKey)
-        
-        var url = URL(string: "https://api.roboflow.com/")!
-        var request = URLRequest(url: url)
-        
-        switch auth {
-        case .oauth(let token):
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        case .apiKey(let key):
-            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-            components.queryItems = [URLQueryItem(name: "api_key", value: key)]
-            url = components.url!
-            request.url = url
-        case .none:
-            throw RoboflowError.authenticationRequired
-        }
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw RoboflowError.apiError(statusCode: 0, message: "Invalid response from server")
-        }
-        
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? ""
-            throw RoboflowError.apiError(statusCode: httpResponse.statusCode, message: "Failed to fetch workspaces: \(errorBody)")
-        }
-        
-        // SIWR/docs return {"workspace":"slug",...}, not {"workspaces":[...]}
+
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            // Try single workspace string (SIWR response)
             if let workspaceSlug = json["workspace"] as? String {
+                await MainActor.run {
+                    if OAuthManager.shared.workspaceURL == nil {
+                        OAuthManager.shared.workspaceURL = workspaceSlug
+                    }
+                }
                 return [Workspace(url: workspaceSlug, name: workspaceSlug, members: 1)]
             }
-            // Try array format (if it exists)
             if let workspacesArray = json["workspaces"] as? [[String: Any]] {
-                let workspaces = workspacesArray.compactMap { dict -> Workspace? in
+                return workspacesArray.compactMap { dict -> Workspace? in
                     guard let url = dict["url"] as? String else { return nil }
                     let name = dict["name"] as? String ?? url
                     let members = dict["members"] as? Int ?? 1
                     return Workspace(url: url, name: name, members: members)
                 }
-                return workspaces
             }
         }
-        
-        throw RoboflowError.apiError(statusCode: httpResponse.statusCode, message: "No workspace found in API response")
+
+        throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data,
+                            fallback: "No workspace found in API response")
     }
-    
-    // List all projects in a workspace
-    func listProjects(workspace: String, apiKey: String? = nil) async throws -> [Project] {
-        let auth = try await getAuthMethod(apiKey: apiKey)
-        
-        var url = URL(string: "https://api.roboflow.com/\(workspace)")!
-        var request = URLRequest(url: url)
-        
-        switch auth {
-        case .oauth(let token):
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        case .apiKey(let key):
-            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-            components.queryItems = [URLQueryItem(name: "api_key", value: key)]
-            url = components.url!
-            request.url = url
-        case .none:
-            throw RoboflowError.authenticationRequired
+
+    func listProjects(workspace: String) async throws -> [Project] {
+        let endpoint = "/\(workspace)"
+        let request = URLRequest(url: URL(string: "https://api.roboflow.com/\(workspace)")!)
+        let (data, http) = try await OAuthManager.shared.authorizedData(for: request)
+
+        guard http.statusCode == 200 else {
+            throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data)
         }
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw RoboflowError.apiError(statusCode: 0, message: "Failed to fetch projects")
-        }
-        
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? ""
-            throw RoboflowError.apiError(statusCode: httpResponse.statusCode, message: "Failed to fetch projects: \(errorBody)")
-        }
-        
+
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let projectsDict = json["workspace"] as? [String: Any],
            let projectsArray = projectsDict["projects"] as? [[String: Any]] {
-            
-            let projects = projectsArray.compactMap { dict -> Project? in
+            return projectsArray.compactMap { dict -> Project? in
                 guard let id = dict["id"] as? String,
                       let name = dict["name"] as? String else {
                     return nil
                 }
                 return Project(id: id, name: name, workspace: workspace)
             }
-            return projects
         }
-        
+
         return []
     }
-    
-    
-    // MARK: - Upload & Annotate (OAuth Bearer token)
-    
-    // Default tag for Scout uploads (configurable)
-    static let defaultUploadTag = "scout"
-    
-    // Upload image to Roboflow project using OAuth or API key
-    func uploadImage(
-        image: UIImage,
-        imageName: String,
+
+    // MARK: - Zip upload (OAuth-safe path)
+
+    /// Upload JPEGs via POST /{ws}/{project}/upload/zip → PUT signedUrl → poll → resolve ids.
+    func uploadImagesViaZip(
+        entries: [ZipUploadEntry],
         project: String,
-        tag: String? = defaultUploadTag,
-        batchName: String? = nil,
-        apiKey: String? = nil
-    ) async throws -> String {
-        let auth = try await getAuthMethod(apiKey: apiKey)
-        
-        let token: String
-        switch auth {
-        case .oauth(let oauthToken):
-            token = oauthToken
-        case .apiKey(let key):
-            return try await uploadImageWithAPIKey(
-                image: image,
-                imageName: imageName,
-                project: project,
-                tag: tag,
+        batchName: String,
+        tags: [String] = [defaultUploadTag],
+        onProgress: (@MainActor (String) -> Void)? = nil
+    ) async throws -> ZipUploadResult {
+        guard !entries.isEmpty else {
+            let ws = try resolveWorkspace(from: project)
+            let slug = projectSlug(from: project)
+            return ZipUploadResult(
+                imageIds: [:],
+                batchId: nil,
+                openURL: Self.annotateURL(workspace: ws, projectSlug: slug, batchId: nil),
                 batchName: batchName,
-                apiKey: key
+                workspace: ws,
+                projectSlug: slug
             )
-        case .none:
-            throw RoboflowError.authenticationRequired
         }
-        
-        guard let imageData = image.jpegData(compressionQuality: 0.8) else {
-            throw RoboflowError.imageConversionFailed
+
+        let workspace = try resolveWorkspace(from: project)
+        let projectSlug = projectSlug(from: project)
+
+        await onProgress?("Preparing zip (\(entries.count) images)…")
+
+        var zipEntries: [(name: String, data: Data)] = []
+        zipEntries.reserveCapacity(entries.count)
+        for entry in entries {
+            zipEntries.append((name: "train/\(entry.imageName)", data: entry.jpegData))
         }
-        
-        let base64String = imageData.base64EncodedString()
-        
-        // Extract project slug from qualified ID (ws/proj -> proj)
-        let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
-        
-        // Upload using Bearer token, with tag and batch as query params
-        var components = URLComponents(string: "https://api.roboflow.com/dataset/\(projectSlug)/upload")!
-        var queryItems = [
-            URLQueryItem(name: "name", value: imageName),
-            URLQueryItem(name: "split", value: "train")
-        ]
-        
-        if let tag = tag, !tag.isEmpty {
-            queryItems.append(URLQueryItem(name: "tag", value: tag))
+        let zipData = try StoreZipWriter.makeZip(entries: zipEntries)
+
+        await onProgress?("Requesting upload slot…")
+        let (taskId, signedUrl) = try await initiateZipUpload(
+            workspace: workspace,
+            projectSlug: projectSlug,
+            batchName: batchName,
+            tags: tags
+        )
+
+        await onProgress?("Uploading zip…")
+        try await putSignedZip(signedUrl: signedUrl, zipData: zipData)
+
+        await onProgress?("Processing upload…")
+        let pollJSON = try await pollZipTask(workspace: workspace, taskId: taskId)
+
+        await onProgress?("Looking up batch…")
+        let batchId = await resolveBatchId(
+            workspace: workspace,
+            projectSlug: projectSlug,
+            batchName: batchName,
+            pollJSON: pollJSON
+        )
+
+        await onProgress?("Resolving image IDs…")
+        var ids: [UUID: String] = [:]
+        for entry in entries {
+            let imageId = try await resolveImageId(
+                workspace: workspace,
+                projectSlug: projectSlug,
+                filename: entry.imageName
+            )
+            ids[entry.frameId] = imageId
         }
-        
-        if let batchName = batchName, !batchName.isEmpty {
-            queryItems.append(URLQueryItem(name: "batch", value: batchName))
-        }
-        
-        components.queryItems = queryItems
-        
-        guard let uploadURL = components.url else {
-            throw RoboflowError.invalidURL
-        }
-        
-        var request = URLRequest(url: uploadURL)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        
-        request.httpBody = base64String.data(using: .utf8)
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            let errorMessage = String(data: data, encoding: .utf8) ?? "Upload failed"
-            throw RoboflowError.uploadFailed(message: errorMessage)
-        }
-        
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let imageId = json["id"] as? String {
-            return imageId
-        }
-        
-        throw RoboflowError.uploadFailed(message: "No image ID returned")
+
+        return ZipUploadResult(
+            imageIds: ids,
+            batchId: batchId,
+            openURL: Self.annotateURL(workspace: workspace, projectSlug: projectSlug, batchId: batchId),
+            batchName: batchName,
+            workspace: workspace,
+            projectSlug: projectSlug
+        )
     }
-    
-    // Upload image using API key (fallback when not signed in)
-    private func uploadImageWithAPIKey(
-        image: UIImage,
-        imageName: String,
-        project: String,
-        tag: String?,
-        batchName: String?,
-        apiKey: String
+
+    /// Web URLs from Roboflow product-navigation skill
+    /// (github.com/roboflow/computer-vision-skills …/product-navigation/SKILL.md):
+    /// Annotate `/{ws}/{proj}/annotate`, batch `/{ws}/{proj}/annotate/batch/{batchId}`.
+    static func annotateURL(workspace: String, projectSlug: String, batchId: String?) -> URL {
+        if let batchId, !batchId.isEmpty {
+            return URL(string: "https://app.roboflow.com/\(workspace)/\(projectSlug)/annotate/batch/\(batchId)")!
+        }
+        return URL(string: "https://app.roboflow.com/\(workspace)/\(projectSlug)/annotate")!
+    }
+
+    private func initiateZipUpload(
+        workspace: String,
+        projectSlug: String,
+        batchName: String,
+        tags: [String]
+    ) async throws -> (taskId: String, signedUrl: URL) {
+        let endpoint = "/\(workspace)/\(projectSlug)/upload/zip"
+        var request = URLRequest(url: URL(string: "https://api.roboflow.com\(endpoint)")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "split": "train",
+            "batchName": batchName,
+            "tags": tags
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, http) = try await OAuthManager.shared.authorizedData(for: request)
+        guard http.statusCode == 200 || http.statusCode == 201 else {
+            throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data)
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data,
+                                fallback: "Invalid JSON from zip upload init")
+        }
+
+        let taskId = (json["taskId"] as? String)
+            ?? (json["task_id"] as? String)
+            ?? (json["id"] as? String)
+        let urlString = (json["signedUrl"] as? String)
+            ?? (json["signed_url"] as? String)
+            ?? (json["url"] as? String)
+
+        guard let taskId, let urlString, let signedUrl = URL(string: urlString) else {
+            throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data,
+                                fallback: "zip init missing taskId/signedUrl")
+        }
+        return (taskId, signedUrl)
+    }
+
+    private func putSignedZip(signedUrl: URL, zipData: Data) async throws {
+        let endpoint = signedUrl.host.map { "PUT https://\($0)/…" } ?? "PUT signedUrl"
+        var request = URLRequest(url: signedUrl)
+        request.httpMethod = "PUT"
+        request.setValue("application/zip", forHTTPHeaderField: "Content-Type")
+        request.httpBody = zipData
+        // Signed URL: no Authorization header
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw RoboflowError.invalidResponse
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data)
+        }
+    }
+
+    private func pollZipTask(workspace: String, taskId: String) async throws -> [String: Any] {
+        let endpoint = "/\(workspace)/upload/zip/\(taskId)"
+        let url = URL(string: "https://api.roboflow.com\(endpoint)")!
+        let deadline = Date().addingTimeInterval(180)
+
+        while Date() < deadline {
+            let request = URLRequest(url: url)
+            let (data, http) = try await OAuthManager.shared.authorizedData(for: request)
+
+            if http.statusCode != 200 {
+                throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data)
+            }
+
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data,
+                                    fallback: "Invalid poll JSON")
+            }
+
+            let status = ((json["status"] as? String)
+                ?? (json["state"] as? String)
+                ?? "").lowercased()
+
+            ScoutLog.verbose("🔵 [ScoutUpload] zip task \(taskId) status=\(status)")
+
+            if status == "completed" || status == "complete" || status == "success" || status == "succeeded" {
+                if let result = json["result"] as? [String: Any] {
+                    let uploaded = result["uploaded"] ?? result["success"]
+                    let failed = result["failed"] ?? result["failure"]
+                    ScoutLog.verbose("🔵 [ScoutUpload] zip result uploaded=\(String(describing: uploaded)) failed=\(String(describing: failed))")
+                }
+                return json
+            }
+            if status == "failed" || status == "error" || status == "cancelled" {
+                throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data,
+                                    fallback: "Zip upload task \(status)")
+            }
+
+            try await Task.sleep(nanoseconds: 3_000_000_000)
+        }
+
+        throw RoboflowError.uploadFailed(message: "Zip upload task timed out after ~3 min (\(endpoint))")
+    }
+
+    /// Prefer batch id from zip status JSON; else GET /{ws}/{project}/batches and match name.
+    private func resolveBatchId(
+        workspace: String,
+        projectSlug: String,
+        batchName: String,
+        pollJSON: [String: Any]
+    ) async -> String? {
+        if let fromPoll = extractBatchId(from: pollJSON) {
+            ScoutLog.verbose("🔵 [ScoutUpload] batch id from zip status: \(fromPoll)")
+            return fromPoll
+        }
+
+        let endpoint = "/\(workspace)/\(projectSlug)/batches"
+        let request = URLRequest(url: URL(string: "https://api.roboflow.com\(endpoint)")!)
+        do {
+            let (data, http) = try await OAuthManager.shared.authorizedData(for: request)
+            ScoutLog.verbose("🔵 [ScoutUpload] batches list status=\(http.statusCode)")
+            guard http.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            let batches = (json["batches"] as? [[String: Any]])
+                ?? (json["data"] as? [[String: Any]])
+                ?? []
+            func batchDisplayName(_ b: [String: Any]) -> String? {
+                (b["name"] as? String) ?? (b["batchName"] as? String) ?? (b["batch"] as? String)
+            }
+            if let match = batches.first(where: { batchDisplayName($0) == batchName }) {
+                if let id = match["id"] as? String, !id.isEmpty {
+                    ScoutLog.verbose("🔵 [ScoutUpload] batch id from list match name=\(batchName): \(id)")
+                    return id
+                }
+            }
+            ScoutLog.verbose("🟡 [ScoutUpload] no batch named \(batchName) in \(batches.count) batches")
+        } catch {
+            ScoutLog.verbose("🟡 [ScoutUpload] batches list failed: \(error.localizedDescription)")
+        }
+        return nil
+    }
+
+    private func extractBatchId(from json: [String: Any]) -> String? {
+        let keys = ["batchId", "batch_id", "batch", "sourceBatch", "source_batch"]
+        for key in keys {
+            if let s = json[key] as? String, !s.isEmpty { return s }
+        }
+        if let result = json["result"] as? [String: Any] {
+            for key in keys {
+                if let s = result[key] as? String, !s.isEmpty { return s }
+            }
+            if let batch = result["batch"] as? [String: Any], let id = batch["id"] as? String {
+                return id
+            }
+        }
+        // url field may contain …/annotate/batch/{id}
+        for key in ["url", "signedUrl", "webUrl", "href"] {
+            if let url = json[key] as? String,
+               let range = url.range(of: "/annotate/batch/") {
+                let rest = String(url[range.upperBound...])
+                let id = rest.split(separator: "/").first.map(String.init)
+                if let id, !id.isEmpty { return id }
+            }
+            if let result = json["result"] as? [String: Any],
+               let url = result[key] as? String,
+               let range = url.range(of: "/annotate/batch/") {
+                let rest = String(url[range.upperBound...])
+                let id = rest.split(separator: "/").first.map(String.init)
+                if let id, !id.isEmpty { return id }
+            }
+        }
+        return nil
+    }
+
+    private func resolveImageId(
+        workspace: String,
+        projectSlug: String,
+        filename: String
     ) async throws -> String {
-        guard let imageData = image.jpegData(compressionQuality: 0.8) else {
-            throw RoboflowError.imageConversionFailed
-        }
-        
-        let base64String = imageData.base64EncodedString()
-        
-        // Extract project slug from qualified ID
-        let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
-        
-        var components = URLComponents(string: "https://api.roboflow.com/dataset/\(projectSlug)/upload")!
-        var queryItems = [
-            URLQueryItem(name: "api_key", value: apiKey),
-            URLQueryItem(name: "name", value: imageName),
-            URLQueryItem(name: "split", value: "train")
+        let endpoint = "/\(workspace)/search/v1"
+        let queries = [
+            "project:\(projectSlug) filename:\(filename)",
+            "project:\(projectSlug) filename:\"\(filename)\"",
+            "filename:\(filename)",
+            "filename:\"\(filename)\""
         ]
-        
-        if let tag = tag, !tag.isEmpty {
-            queryItems.append(URLQueryItem(name: "tag", value: tag))
+
+        var lastData = Data()
+        var lastStatus = 0
+
+        for attempt in 0..<6 {
+            if attempt > 0 {
+                let delay = UInt64(min(8, 1 << (attempt - 1))) * 500_000_000
+                try await Task.sleep(nanoseconds: delay)
+            }
+
+            for query in queries {
+                var request = URLRequest(url: URL(string: "https://api.roboflow.com\(endpoint)")!)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                let body: [String: Any] = [
+                    "query": query,
+                    "pageSize": 1,
+                    "fields": ["id"]
+                ]
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+                let (data, http) = try await OAuthManager.shared.authorizedData(for: request)
+                lastData = data
+                lastStatus = http.statusCode
+
+                ScoutLog.verbose("🔵 [ScoutUpload] search q=\(query) status=\(http.statusCode)")
+
+                if http.statusCode != 200 {
+                    continue
+                }
+
+                if let id = extractImageId(from: data) {
+                    return id
+                }
+            }
         }
-        
-        if let batchName = batchName, !batchName.isEmpty {
-            queryItems.append(URLQueryItem(name: "batch", value: batchName))
-        }
-        
-        components.queryItems = queryItems
-        
-        guard let uploadURL = components.url else {
-            throw RoboflowError.invalidURL
-        }
-        
-        var request = URLRequest(url: uploadURL)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.httpBody = base64String.data(using: .utf8)
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            let errorMessage = String(data: data, encoding: .utf8) ?? "Upload failed"
-            throw RoboflowError.uploadFailed(message: errorMessage)
-        }
-        
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let imageId = json["id"] as? String {
-            return imageId
-        }
-        
-        throw RoboflowError.uploadFailed(message: "No image ID returned")
+
+        throw Self.apiError(status: lastStatus, endpoint: endpoint, data: lastData,
+                            fallback: "Could not resolve image id for \(filename)")
     }
-    
-    
-    // Annotate image as null using COCO JSON format (OAuth or API key).
-    // Matches Roboflow Python SDK: fake annotation with unmatched image_id so the
-    // image is accepted as COCO but ends up with zero boxes (a null/negative example).
+
+    private func extractImageId(from data: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) else { return nil }
+
+        if let dict = json as? [String: Any] {
+            if let id = dict["id"] as? String { return id }
+            for key in ["results", "images", "data", "items", "hits"] {
+                if let arr = dict[key] as? [[String: Any]], let first = arr.first {
+                    if let id = first["id"] as? String { return id }
+                    if let id = first["_id"] as? String { return id }
+                }
+            }
+        }
+        if let arr = json as? [[String: Any]], let first = arr.first {
+            if let id = first["id"] as? String { return id }
+        }
+        return nil
+    }
+
+    // MARK: - Annotate (null)
+
+    /// Annotate as null using COCO JSON (SDK fake-annotation workaround).
+    /// Uses workspace-path route that accepts OAuth Bearer tokens.
     func annotateAsNull(
         imageId: String,
         imageName: String,
         imageWidth: Int,
         imageHeight: Int,
-        project: String,
-        apiKey: String? = nil
+        project: String
     ) async throws {
-        let auth = try await getAuthMethod(apiKey: apiKey)
-        
-        // file_name must match the `name` query used on upload (includes extension, e.g. .jpg)
+        let workspace = try resolveWorkspace(from: project)
+        let projectSlug = projectSlug(from: project)
+
         let cocoJson: [String: Any] = [
             "info": [
                 "description": "Scout null frame"
@@ -356,8 +487,6 @@ class RoboflowService {
                     "height": imageHeight
                 ]
             ],
-            // SDK workaround: non-empty annotations required for COCO recognition,
-            // but image_id does not match any image → zero boxes on this image.
             "annotations": [
                 [
                     "id": 999999999,
@@ -370,99 +499,209 @@ class RoboflowService {
                 ]
             ]
         ]
-        
+
         guard let cocoJsonData = try? JSONSerialization.data(withJSONObject: cocoJson),
               let cocoJsonString = String(data: cocoJsonData, encoding: .utf8) else {
             throw RoboflowError.annotationFailed(message: "Failed to create COCO JSON")
         }
-        
-        let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
-        
-        var components = URLComponents(string: "https://api.roboflow.com/dataset/\(projectSlug)/annotate/\(imageId)")!
+
+        var components = URLComponents(string: "https://api.roboflow.com/\(workspace)/\(projectSlug)/annotate/\(imageId)")!
         components.queryItems = [
-            URLQueryItem(name: "name", value: "annotation.coco.json")
+            URLQueryItem(name: "name", value: "annotation.coco.json"),
+            URLQueryItem(name: "overwrite", value: "true")
         ]
-        
-        if case .apiKey(let key) = auth {
-            components.queryItems?.append(URLQueryItem(name: "api_key", value: key))
-        } else if case .none = auth {
-            throw RoboflowError.authenticationRequired
-        }
-        
+
         guard let annotateURL = components.url else {
             throw RoboflowError.invalidURL
         }
-        
+
+        let endpoint = "/\(workspace)/\(projectSlug)/annotate/\(imageId)"
         var request = URLRequest(url: annotateURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        if case .oauth(let token) = auth {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        
         let payload: [String: Any] = [
-            "annotationFile": cocoJsonString,
-            "labelmap": NSNull()
+            "annotationFile": cocoJsonString
         ]
-        
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw RoboflowError.invalidResponse
-        }
-        
-        let responseBody = String(data: data, encoding: .utf8) ?? ""
-        
-        if httpResponse.statusCode == 409 {
+
+        let (data, http) = try await OAuthManager.shared.authorizedData(for: request)
+
+        if http.statusCode == 409 {
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let error = json["error"] as? [String: Any],
                let message = error["message"] as? String,
                message.contains("already annotated") {
                 return
             }
-            ScoutLog.decision("🔴 [ScoutNullify] 409 response: \(responseBody)")
         }
-        
-        guard httpResponse.statusCode == 200 else {
-            ScoutLog.decision("🔴 [ScoutNullify] annotate failed status=\(httpResponse.statusCode) body=\(responseBody)")
-            throw RoboflowError.annotationFailed(message: responseBody.isEmpty ? "Annotation failed" : responseBody)
+
+        guard http.statusCode == 200 else {
+            throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data)
         }
-        
+
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let success = json["success"] as? Bool, !success {
-                ScoutLog.decision("🔴 [ScoutNullify] annotate success=false body=\(responseBody)")
-                let errorMessage = json["error"] as? String ?? responseBody
-                throw RoboflowError.annotationFailed(message: errorMessage.isEmpty ? "Annotation failed" : errorMessage)
+                throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data,
+                                    fallback: "annotate success=false")
             }
         }
     }
+
+    // MARK: - Helpers
+
+    func resolveWorkspace(from project: String) throws -> String {
+        if let slash = project.firstIndex(of: "/") {
+            let ws = String(project[..<slash])
+            if !ws.isEmpty { return ws }
+        }
+        if let ws = OAuthManager.shared.workspaceURL, !ws.isEmpty {
+            return ws
+        }
+        throw RoboflowError.apiError(
+            statusCode: 0,
+            endpoint: "(workspace)",
+            body: "Missing workspace for project \"\(project)\". Log in again or use workspace/project ids."
+        )
+    }
+
+    func projectSlug(from project: String) -> String {
+        project.split(separator: "/").last.map(String.init) ?? project
+    }
+
+    static func apiError(status: Int, endpoint: String, data: Data, fallback: String? = nil) -> RoboflowError {
+        let raw = String(data: data, encoding: .utf8) ?? ""
+        let body = raw.isEmpty ? (fallback ?? "(empty body)") : String(raw.prefix(500))
+        return .apiError(statusCode: status, endpoint: endpoint, body: body)
+    }
 }
 
+// MARK: - STORE zip (uncompressed) + CRC32
+
+enum StoreZipWriter {
+    static func makeZip(entries: [(name: String, data: Data)]) throws -> Data {
+        var localParts: [Data] = []
+        var centralParts: [Data] = []
+        var offset: UInt32 = 0
+
+        for entry in entries {
+            let nameData = Data(entry.name.utf8)
+            let crc = crc32(entry.data)
+            let size = UInt32(entry.data.count)
+
+            var local = Data()
+            local.append(contentsOf: u32(0x04034b50)) // local file header sig
+            local.append(contentsOf: u16(20)) // version needed
+            local.append(contentsOf: u16(0)) // flags
+            local.append(contentsOf: u16(0)) // method STORE
+            local.append(contentsOf: u16(0)) // time
+            local.append(contentsOf: u16(0)) // date
+            local.append(contentsOf: u32(crc))
+            local.append(contentsOf: u32(size))
+            local.append(contentsOf: u32(size))
+            local.append(contentsOf: u16(UInt16(nameData.count)))
+            local.append(contentsOf: u16(0)) // extra len
+            local.append(nameData)
+            local.append(entry.data)
+
+            var central = Data()
+            central.append(contentsOf: u32(0x02014b50)) // central dir sig
+            central.append(contentsOf: u16(20)) // version made by
+            central.append(contentsOf: u16(20)) // version needed
+            central.append(contentsOf: u16(0))
+            central.append(contentsOf: u16(0)) // STORE
+            central.append(contentsOf: u16(0))
+            central.append(contentsOf: u16(0))
+            central.append(contentsOf: u32(crc))
+            central.append(contentsOf: u32(size))
+            central.append(contentsOf: u32(size))
+            central.append(contentsOf: u16(UInt16(nameData.count)))
+            central.append(contentsOf: u16(0))
+            central.append(contentsOf: u16(0)) // comment
+            central.append(contentsOf: u16(0)) // disk start
+            central.append(contentsOf: u16(0)) // int attrs
+            central.append(contentsOf: u32(0)) // ext attrs
+            central.append(contentsOf: u32(offset))
+            central.append(nameData)
+
+            localParts.append(local)
+            centralParts.append(central)
+            offset += UInt32(local.count)
+        }
+
+        var out = Data()
+        for part in localParts { out.append(part) }
+        let centralOffset = UInt32(out.count)
+        var centralSize: UInt32 = 0
+        for part in centralParts {
+            out.append(part)
+            centralSize += UInt32(part.count)
+        }
+
+        // End of central directory
+        out.append(contentsOf: u32(0x06054b50))
+        out.append(contentsOf: u16(0)) // disk
+        out.append(contentsOf: u16(0)) // disk with cd
+        out.append(contentsOf: u16(UInt16(entries.count)))
+        out.append(contentsOf: u16(UInt16(entries.count)))
+        out.append(contentsOf: u32(centralSize))
+        out.append(contentsOf: u32(centralOffset))
+        out.append(contentsOf: u16(0)) // comment len
+        return out
+    }
+
+    private static func u16(_ v: UInt16) -> [UInt8] {
+        [UInt8(v & 0xff), UInt8((v >> 8) & 0xff)]
+    }
+
+    private static func u32(_ v: UInt32) -> [UInt8] {
+        [UInt8(v & 0xff), UInt8((v >> 8) & 0xff), UInt8((v >> 16) & 0xff), UInt8((v >> 24) & 0xff)]
+    }
+
+    private static let crcTable: [UInt32] = {
+        (0..<256).map { i -> UInt32 in
+            var c = UInt32(i)
+            for _ in 0..<8 {
+                if c & 1 != 0 {
+                    c = 0xedb88320 ^ (c >> 1)
+                } else {
+                    c = c >> 1
+                }
+            }
+            return c
+        }
+    }()
+
+    private static func crc32(_ data: Data) -> UInt32 {
+        var crc: UInt32 = 0xffffffff
+        for byte in data {
+            let idx = Int((crc ^ UInt32(byte)) & 0xff)
+            crc = crcTable[idx] ^ (crc >> 8)
+        }
+        return crc ^ 0xffffffff
+    }
+}
 
 enum RoboflowError: LocalizedError {
     case authenticationRequired
     case imageConversionFailed
     case invalidURL
     case invalidResponse
-    case apiError(statusCode: Int, message: String)
+    case apiError(statusCode: Int, endpoint: String, body: String)
     case uploadFailed(message: String)
     case annotationFailed(message: String)
-    
+
     var errorDescription: String? {
         switch self {
         case .authenticationRequired:
-            return "Please configure a Roboflow API key in Settings"
+            return "Please log in with Roboflow in Settings"
         case .imageConversionFailed:
             return "Failed to process image"
         case .invalidURL:
             return "Invalid API URL"
         case .invalidResponse:
             return "Invalid response from server"
-        case .apiError(let statusCode, let message):
-            return "API Error (\(statusCode)): \(message)"
+        case .apiError(let statusCode, let endpoint, let body):
+            return "HTTP \(statusCode) \(endpoint): \(body)"
         case .uploadFailed(let message):
             return "Upload failed: \(message)"
         case .annotationFailed(let message):

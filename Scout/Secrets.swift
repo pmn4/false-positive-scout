@@ -1,7 +1,8 @@
 import Foundation
 
-/// Loads optional local secrets from the bundled `Secrets.plist`.
-/// Real values live only in the gitignored `Config/Secrets.plist` (copied into the app at build time).
+/// Optional local overrides from a bundled `Secrets.plist`.
+/// Copy `Config/Secrets.plist.example` → `Config/Secrets.plist` (gitignored) if you want defaults.
+/// The file is optional; builds succeed without it.
 enum Secrets {
     private static let values: [String: Any] = {
         guard let url = Bundle.main.url(forResource: "Secrets", withExtension: "plist"),
@@ -19,10 +20,7 @@ enum Secrets {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// Optional default API key. In-app Settings / Keychain still wins when the user has saved a key.
-    static var roboflowAPIKey: String? { string("ROBOFLOW_API_KEY") }
-
-    /// OAuth client ID (only needed if OAuthConfig.isEnabled).
+    /// Optional override for the public OAuth client ID (default is baked into OAuthManager).
     static var roboflowOAuthClientID: String? { string("ROBOFLOW_OAUTH_CLIENT_ID") }
 
     /// Optional default Roboflow workspace slug for first-run model picker.
