@@ -46,6 +46,16 @@ struct ZipUploadEntry {
     let jpegData: Data
 }
 
+struct ZipUploadResult {
+    let imageIds: [UUID: String]
+    let batchId: String?
+    /// Confirmed app.roboflow.com link (batch page when id known, else project Annotate).
+    let openURL: URL
+    let batchName: String
+    let workspace: String
+    let projectSlug: String
+}
+
 class RoboflowService {
     static let shared = RoboflowService()
 
@@ -114,15 +124,25 @@ class RoboflowService {
     // MARK: - Zip upload (OAuth-safe path)
 
     /// Upload JPEGs via POST /{ws}/{project}/upload/zip → PUT signedUrl → poll → resolve ids.
-    /// Returns map of frameId → Roboflow image id.
     func uploadImagesViaZip(
         entries: [ZipUploadEntry],
         project: String,
         batchName: String,
         tags: [String] = [defaultUploadTag],
         onProgress: (@MainActor (String) -> Void)? = nil
-    ) async throws -> [UUID: String] {
-        guard !entries.isEmpty else { return [:] }
+    ) async throws -> ZipUploadResult {
+        guard !entries.isEmpty else {
+            let ws = try resolveWorkspace(from: project)
+            let slug = projectSlug(from: project)
+            return ZipUploadResult(
+                imageIds: [:],
+                batchId: nil,
+                openURL: Self.annotateURL(workspace: ws, projectSlug: slug, batchId: nil),
+                batchName: batchName,
+                workspace: ws,
+                projectSlug: slug
+            )
+        }
 
         let workspace = try resolveWorkspace(from: project)
         let projectSlug = projectSlug(from: project)
@@ -148,19 +168,45 @@ class RoboflowService {
         try await putSignedZip(signedUrl: signedUrl, zipData: zipData)
 
         await onProgress?("Processing upload…")
-        try await pollZipTask(workspace: workspace, taskId: taskId)
+        let pollJSON = try await pollZipTask(workspace: workspace, taskId: taskId)
+
+        await onProgress?("Looking up batch…")
+        let batchId = await resolveBatchId(
+            workspace: workspace,
+            projectSlug: projectSlug,
+            batchName: batchName,
+            pollJSON: pollJSON
+        )
 
         await onProgress?("Resolving image IDs…")
-        var result: [UUID: String] = [:]
+        var ids: [UUID: String] = [:]
         for entry in entries {
             let imageId = try await resolveImageId(
                 workspace: workspace,
                 projectSlug: projectSlug,
                 filename: entry.imageName
             )
-            result[entry.frameId] = imageId
+            ids[entry.frameId] = imageId
         }
-        return result
+
+        return ZipUploadResult(
+            imageIds: ids,
+            batchId: batchId,
+            openURL: Self.annotateURL(workspace: workspace, projectSlug: projectSlug, batchId: batchId),
+            batchName: batchName,
+            workspace: workspace,
+            projectSlug: projectSlug
+        )
+    }
+
+    /// Web URLs from Roboflow product-navigation skill
+    /// (github.com/roboflow/computer-vision-skills …/product-navigation/SKILL.md):
+    /// Annotate `/{ws}/{proj}/annotate`, batch `/{ws}/{proj}/annotate/batch/{batchId}`.
+    static func annotateURL(workspace: String, projectSlug: String, batchId: String?) -> URL {
+        if let batchId, !batchId.isEmpty {
+            return URL(string: "https://app.roboflow.com/\(workspace)/\(projectSlug)/annotate/batch/\(batchId)")!
+        }
+        return URL(string: "https://app.roboflow.com/\(workspace)/\(projectSlug)/annotate")!
     }
 
     private func initiateZipUpload(
@@ -222,7 +268,7 @@ class RoboflowService {
         }
     }
 
-    private func pollZipTask(workspace: String, taskId: String) async throws {
+    private func pollZipTask(workspace: String, taskId: String) async throws -> [String: Any] {
         let endpoint = "/\(workspace)/upload/zip/\(taskId)"
         let url = URL(string: "https://api.roboflow.com\(endpoint)")!
         let deadline = Date().addingTimeInterval(180)
@@ -234,6 +280,9 @@ class RoboflowService {
             if http.statusCode != 200 {
                 throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data)
             }
+
+            let raw = String(data: data, encoding: .utf8) ?? ""
+            ScoutLog.decision("🔵 [ScoutUpload] zip poll raw=\(raw.prefix(800))")
 
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data,
@@ -252,7 +301,7 @@ class RoboflowService {
                     let failed = result["failed"] ?? result["failure"]
                     ScoutLog.decision("🔵 [ScoutUpload] zip result uploaded=\(String(describing: uploaded)) failed=\(String(describing: failed)) errors=\(String(describing: result["errors"]))")
                 }
-                return
+                return json
             }
             if status == "failed" || status == "error" || status == "cancelled" {
                 throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data,
@@ -263,6 +312,79 @@ class RoboflowService {
         }
 
         throw RoboflowError.uploadFailed(message: "Zip upload task timed out after ~3 min (\(endpoint))")
+    }
+
+    /// Prefer batch id from zip status JSON; else GET /{ws}/{project}/batches and match name.
+    private func resolveBatchId(
+        workspace: String,
+        projectSlug: String,
+        batchName: String,
+        pollJSON: [String: Any]
+    ) async -> String? {
+        if let fromPoll = extractBatchId(from: pollJSON) {
+            ScoutLog.decision("🔵 [ScoutUpload] batch id from zip status: \(fromPoll)")
+            return fromPoll
+        }
+
+        let endpoint = "/\(workspace)/\(projectSlug)/batches"
+        let request = URLRequest(url: URL(string: "https://api.roboflow.com\(endpoint)")!)
+        do {
+            let (data, http) = try await OAuthManager.shared.authorizedData(for: request)
+            let raw = String(data: data, encoding: .utf8) ?? ""
+            ScoutLog.decision("🔵 [ScoutUpload] batches list status=\(http.statusCode) body=\(raw.prefix(800))")
+            guard http.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            let batches = (json["batches"] as? [[String: Any]])
+                ?? (json["data"] as? [[String: Any]])
+                ?? []
+            func batchDisplayName(_ b: [String: Any]) -> String? {
+                (b["name"] as? String) ?? (b["batchName"] as? String) ?? (b["batch"] as? String)
+            }
+            if let match = batches.first(where: { batchDisplayName($0) == batchName }) {
+                if let id = match["id"] as? String, !id.isEmpty {
+                    ScoutLog.decision("🔵 [ScoutUpload] batch id from list match name=\(batchName): \(id)")
+                    return id
+                }
+            }
+            ScoutLog.decision("🟡 [ScoutUpload] no batch named \(batchName) in \(batches.count) batches")
+        } catch {
+            ScoutLog.decision("🟡 [ScoutUpload] batches list failed: \(error.localizedDescription)")
+        }
+        return nil
+    }
+
+    private func extractBatchId(from json: [String: Any]) -> String? {
+        let keys = ["batchId", "batch_id", "batch", "sourceBatch", "source_batch"]
+        for key in keys {
+            if let s = json[key] as? String, !s.isEmpty { return s }
+        }
+        if let result = json["result"] as? [String: Any] {
+            for key in keys {
+                if let s = result[key] as? String, !s.isEmpty { return s }
+            }
+            if let batch = result["batch"] as? [String: Any], let id = batch["id"] as? String {
+                return id
+            }
+        }
+        // url field may contain …/annotate/batch/{id}
+        for key in ["url", "signedUrl", "webUrl", "href"] {
+            if let url = json[key] as? String,
+               let range = url.range(of: "/annotate/batch/") {
+                let rest = String(url[range.upperBound...])
+                let id = rest.split(separator: "/").first.map(String.init)
+                if let id, !id.isEmpty { return id }
+            }
+            if let result = json["result"] as? [String: Any],
+               let url = result[key] as? String,
+               let range = url.range(of: "/annotate/batch/") {
+                let rest = String(url[range.upperBound...])
+                let id = rest.split(separator: "/").first.map(String.init)
+                if let id, !id.isEmpty { return id }
+            }
+        }
+        return nil
     }
 
     private func resolveImageId(

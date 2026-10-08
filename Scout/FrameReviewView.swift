@@ -458,6 +458,15 @@ struct SwipeCard: View {
     }
 }
 
+struct UploadedBatchLink: Identifiable, Hashable {
+    /// Stable id for ForEach (batch id when known, else project slug).
+    let id: String
+    let projectSlug: String
+    let batchName: String
+    let url: URL
+    let hasBatchId: Bool
+}
+
 struct ExportSheet: View {
     let frames: [CapturedFrame]
     @Environment(\.dismiss) var dismiss
@@ -474,6 +483,7 @@ struct ExportSheet: View {
         let project: String
     }
     
+    @Environment(\.openURL) private var openURL
     @State private var isUploading = false
     @State private var uploadProgress: UploadProgress?
     @State private var errorMessage: String?
@@ -481,10 +491,19 @@ struct ExportSheet: View {
     @State private var successCount = 0
     @State private var failureCount = 0
     @State private var partialSuccesses: [PartialSuccess] = []
+    @State private var uploadedBatches: [UploadedBatchLink] = []
     @State private var isRetrying = false
     @State private var currentBatchName: String = ""
     @State private var projectsByWorkspace: [String: [Project]] = [:]
     @State private var isValidatingProjects = false
+    
+    private static let scoutFilenameDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone.current
+        f.dateFormat = "yyyyMMdd_HHmmss"
+        return f
+    }()
     
     private var canAuthenticate: Bool {
         oauthManager.isAuthenticated
@@ -592,6 +611,48 @@ struct ExportSheet: View {
                     }
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
+                    
+                    if !uploadedBatches.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Open in Roboflow")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                            ForEach(uploadedBatches) { batch in
+                                Button {
+                                    openURL(batch.url)
+                                } label: {
+                                    HStack(alignment: .top, spacing: 10) {
+                                        Image(systemName: "safari")
+                                            .foregroundColor(.blue)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(batch.projectSlug)
+                                                .font(.subheadline)
+                                                .fontWeight(.medium)
+                                                .foregroundColor(.primary)
+                                            Text(batch.batchName)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                            if !batch.hasBatchId {
+                                                Text("Project Annotate page (batch id unavailable)")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                            }
+                                        }
+                                        Spacer(minLength: 0)
+                                        Image(systemName: "arrow.up.right")
+                                            .font(.caption)
+                                            .foregroundColor(.blue)
+                                    }
+                                    .padding(12)
+                                    .background(Color.blue.opacity(0.08))
+                                    .cornerRadius(10)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                    }
                 } else {
                     Image(systemName: "cloud.fill")
                         .font(.system(size: 60))
@@ -718,6 +779,7 @@ struct ExportSheet: View {
         
         isUploading = true
         errorMessage = nil
+        uploadedBatches = []
         successCount = 0
         failureCount = 0
         partialSuccesses = []
@@ -762,7 +824,9 @@ struct ExportSheet: View {
                     continue
                 }
                 
-                let imageName = "null_\(frame.id.uuidString).jpg"
+                let stamp = Self.scoutFilenameDateFormatter.string(from: Date())
+                let shortId = String(frame.id.uuidString.prefix(8)).lowercased()
+                let imageName = "scout_\(stamp)_\(shortId).jpg"
                 
                 if let existingImageId = frame.uploadedImageId, !existingImageId.isEmpty {
                     nullifyOnly.append((frame, image, imageName, existingImageId, project))
@@ -804,7 +868,7 @@ struct ExportSheet: View {
                 guard !entries.isEmpty else { continue }
                 
                 do {
-                    let idMap = try await RoboflowService.shared.uploadImagesViaZip(
+                    let zipResult = try await RoboflowService.shared.uploadImagesViaZip(
                         entries: entries,
                         project: project,
                         batchName: currentBatchName,
@@ -818,8 +882,19 @@ struct ExportSheet: View {
                         )
                     }
                     
+                    await MainActor.run {
+                        let linkId = zipResult.batchId ?? "project:\(zipResult.projectSlug)"
+                        uploadedBatches.append(UploadedBatchLink(
+                            id: linkId,
+                            projectSlug: zipResult.projectSlug,
+                            batchName: zipResult.batchName,
+                            url: zipResult.openURL,
+                            hasBatchId: zipResult.batchId != nil
+                        ))
+                    }
+                    
                     for item in group {
-                        guard let imageId = idMap[item.frame.id] else {
+                        guard let imageId = zipResult.imageIds[item.frame.id] else {
                             await MainActor.run {
                                 failureCount += 1
                                 errorMessage = "No image id resolved for \(item.imageName)"
