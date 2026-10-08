@@ -244,7 +244,6 @@ class RoboflowService {
             ?? (json["url"] as? String)
 
         guard let taskId, let urlString, let signedUrl = URL(string: urlString) else {
-            ScoutLog.decision("🔴 [ScoutUpload] zip init missing fields: \(String(data: data, encoding: .utf8) ?? "")")
             throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data,
                                 fallback: "zip init missing taskId/signedUrl")
         }
@@ -281,9 +280,6 @@ class RoboflowService {
                 throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data)
             }
 
-            let raw = String(data: data, encoding: .utf8) ?? ""
-            ScoutLog.decision("🔵 [ScoutUpload] zip poll raw=\(raw.prefix(800))")
-
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data,
                                     fallback: "Invalid poll JSON")
@@ -293,13 +289,13 @@ class RoboflowService {
                 ?? (json["state"] as? String)
                 ?? "").lowercased()
 
-            ScoutLog.decision("🔵 [ScoutUpload] zip task \(taskId) status=\(status)")
+            ScoutLog.verbose("🔵 [ScoutUpload] zip task \(taskId) status=\(status)")
 
             if status == "completed" || status == "complete" || status == "success" || status == "succeeded" {
                 if let result = json["result"] as? [String: Any] {
                     let uploaded = result["uploaded"] ?? result["success"]
                     let failed = result["failed"] ?? result["failure"]
-                    ScoutLog.decision("🔵 [ScoutUpload] zip result uploaded=\(String(describing: uploaded)) failed=\(String(describing: failed)) errors=\(String(describing: result["errors"]))")
+                    ScoutLog.verbose("🔵 [ScoutUpload] zip result uploaded=\(String(describing: uploaded)) failed=\(String(describing: failed))")
                 }
                 return json
             }
@@ -322,7 +318,7 @@ class RoboflowService {
         pollJSON: [String: Any]
     ) async -> String? {
         if let fromPoll = extractBatchId(from: pollJSON) {
-            ScoutLog.decision("🔵 [ScoutUpload] batch id from zip status: \(fromPoll)")
+            ScoutLog.verbose("🔵 [ScoutUpload] batch id from zip status: \(fromPoll)")
             return fromPoll
         }
 
@@ -330,8 +326,7 @@ class RoboflowService {
         let request = URLRequest(url: URL(string: "https://api.roboflow.com\(endpoint)")!)
         do {
             let (data, http) = try await OAuthManager.shared.authorizedData(for: request)
-            let raw = String(data: data, encoding: .utf8) ?? ""
-            ScoutLog.decision("🔵 [ScoutUpload] batches list status=\(http.statusCode) body=\(raw.prefix(800))")
+            ScoutLog.verbose("🔵 [ScoutUpload] batches list status=\(http.statusCode)")
             guard http.statusCode == 200,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return nil
@@ -344,13 +339,13 @@ class RoboflowService {
             }
             if let match = batches.first(where: { batchDisplayName($0) == batchName }) {
                 if let id = match["id"] as? String, !id.isEmpty {
-                    ScoutLog.decision("🔵 [ScoutUpload] batch id from list match name=\(batchName): \(id)")
+                    ScoutLog.verbose("🔵 [ScoutUpload] batch id from list match name=\(batchName): \(id)")
                     return id
                 }
             }
-            ScoutLog.decision("🟡 [ScoutUpload] no batch named \(batchName) in \(batches.count) batches")
+            ScoutLog.verbose("🟡 [ScoutUpload] no batch named \(batchName) in \(batches.count) batches")
         } catch {
-            ScoutLog.decision("🟡 [ScoutUpload] batches list failed: \(error.localizedDescription)")
+            ScoutLog.verbose("🟡 [ScoutUpload] batches list failed: \(error.localizedDescription)")
         }
         return nil
     }
@@ -424,8 +419,7 @@ class RoboflowService {
                 lastData = data
                 lastStatus = http.statusCode
 
-                let raw = String(data: data, encoding: .utf8) ?? ""
-                ScoutLog.decision("🔵 [ScoutUpload] search q=\(query) status=\(http.statusCode) body=\(raw.prefix(400))")
+                ScoutLog.verbose("🔵 [ScoutUpload] search q=\(query) status=\(http.statusCode)")
 
                 if http.statusCode != 200 {
                     continue
@@ -531,7 +525,6 @@ class RoboflowService {
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         let (data, http) = try await OAuthManager.shared.authorizedData(for: request)
-        let responseBody = String(data: data, encoding: .utf8) ?? ""
 
         if http.statusCode == 409 {
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -540,11 +533,9 @@ class RoboflowService {
                message.contains("already annotated") {
                 return
             }
-            ScoutLog.decision("🔴 [ScoutNullify] 409 response: \(responseBody)")
         }
 
         guard http.statusCode == 200 else {
-            ScoutLog.decision("🔴 [ScoutNullify] annotate failed status=\(http.statusCode) body=\(responseBody)")
             throw Self.apiError(status: http.statusCode, endpoint: endpoint, data: data)
         }
 
