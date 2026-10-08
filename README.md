@@ -1,6 +1,6 @@
 # False Positive Scout
 
-![Scout demo (placeholder)](docs/media/scout-demo.gif)
+<img src="docs/media/scout-demo.gif" alt="Scout demo" width="300" />
 
 Point your iPhone at things your Roboflow object detector wrongly “sees.” Scout runs **your** Core ML model live on device, saves frames **only while you hold the shutter**, lets you swipe-review them, and uploads the mistakes you keep back to that model’s Roboflow project as **null (empty) images** so the next train learns “this is not a stick.”
 
@@ -10,8 +10,8 @@ There is **no TestFlight or App Store build**. You try Scout by cloning this rep
 
 ## Demo
 
-- **GIF (README hero):** [`docs/media/scout-demo.gif`](docs/media/scout-demo.gif) — *placeholder; asset landing separately*
-- **Video:** [`docs/media/scout-demo.mp4`](docs/media/scout-demo.mp4) — *placeholder; 30–45s walkthrough landing separately*
+- **GIF (above):** short loop of Scout → Review → Upload
+- **Video (~36s):** [docs/media/scout-demo.mp4](docs/media/scout-demo.mp4)
 
 ## Requirements
 
