@@ -1,6 +1,0 @@
-// Open-source signing defaults. Copy Signing.local.xcconfig.example → Signing.local.xcconfig
-// and set your Apple team + a unique bundle ID. Signing.local.xcconfig is gitignored.
-DEVELOPMENT_TEAM =
-PRODUCT_BUNDLE_IDENTIFIER = com.example.falsepositivescout
-
-#include? "Signing.local.xcconfig"

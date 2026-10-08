@@ -19,10 +19,15 @@ OAuth / “Sign in with Roboflow” is implemented but **shelved** ([issue #3](h
 ## How to try it (sideload)
 
 1. `git clone https://github.com/pmn4/false-positive-scout.git && cd false-positive-scout`
-2. `cp Config/Signing.local.xcconfig.example Config/Signing.local.xcconfig`
-3. Edit `Config/Signing.local.xcconfig`: set `DEVELOPMENT_TEAM` to your Team ID and `PRODUCT_BUNDLE_IDENTIFIER` to a **unique** id (e.g. `com.yourname.falsepositivescout`).
-4. Open `Scout.xcodeproj` in Xcode, select your team if prompted, plug in your iPhone, Run.
-5. In **Settings**, paste a Roboflow API key (Keychain). Pick workspace → project → model version; Scout downloads and caches the Core ML package.
+2. Copy the secret templates (both are **required**; the build fails with a clear error if either is missing):
+   ```bash
+   cp Config/Secrets.xcconfig.example Config/Secrets.xcconfig
+   cp Config/Secrets.plist.example Config/Secrets.plist
+   ```
+3. Edit `Config/Secrets.xcconfig`: set `DEVELOPMENT_TEAM` to your Team ID and `PRODUCT_BUNDLE_IDENTIFIER` to a **unique** id (e.g. `com.yourname.falsepositivescout`).
+4. Optionally edit `Config/Secrets.plist` for a default API key, OAuth client ID (only if re-enabling OAuth), or default workspace/project. Leave keys empty to configure everything in the app.
+5. Open `Scout.xcodeproj` in Xcode, plug in your iPhone, Run.
+6. In **Settings**, paste a Roboflow API key if you did not put one in Secrets.plist (Keychain wins over the plist default). Pick workspace → project → model version; Scout downloads and caches the Core ML package.
 
 Simulator check (no signing / no camera):
 
@@ -72,7 +77,7 @@ For each kept frame (code paths in `FrameReviewView` / `RoboflowService`):
 | `SettingsView.swift` | API key (Keychain), model selection |
 | `OAuthConfig.swift` / `OAuthManager.swift` | Shelved OAuth (flagged off); redirect relay `https://pmn4.github.io/false-positive-scout/oauth/callback` |
 | `ScoutLog.swift` | Decision logs always; per-frame verbose gated |
-| `Config/Signing.xcconfig` | Open-source signing defaults + optional local override |
+| `Config/Scout.xcconfig` + `Secrets.*` | Signing/bundle via gitignored `Secrets.xcconfig`; optional plist defaults |
 
 ## Roboflow gotchas we learned
 
@@ -84,7 +89,7 @@ For each kept frame (code paths in `FrameReviewView` / `RoboflowService`):
 ## Privacy & signing
 
 - API keys stay in Keychain. Do not commit keys, `.env`, or footage of people (especially kids).
-- `Config/Signing.local.xcconfig` is gitignored so your team ID and bundle ID never need to sit in the shared project file.
+- `Config/Secrets.xcconfig` and `Config/Secrets.plist` are gitignored. Copy the `.example` files; the Xcode build errors out if they are missing.
 
 ## License
 

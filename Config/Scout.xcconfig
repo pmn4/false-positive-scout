@@ -1,0 +1,2 @@
+// Base config for Scout. Requires a local Secrets.xcconfig (see Secrets.xcconfig.example).
+#include "Secrets.xcconfig"

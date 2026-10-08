@@ -78,5 +78,8 @@ Scout.xcodeproj/xcuserdata/
 *.mlmodelc
 ModelsCache/
 
-# Local signing overrides (keep your team + bundle ID off git)
-Config/Signing.local.xcconfig
+# Local secrets (never commit real team/bundle/API/OAuth values)
+Config/Secrets.xcconfig
+Config/Secrets.plist
+Secrets.xcconfig
+Secrets.plist

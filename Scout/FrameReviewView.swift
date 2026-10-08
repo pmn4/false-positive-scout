@@ -674,7 +674,7 @@ struct ExportSheet: View {
             }
         }
         .onAppear {
-            apiKey = KeychainHelper.loadAPIKey() ?? ""
+            apiKey = KeychainHelper.loadAPIKey() ?? Secrets.roboflowAPIKey ?? ""
         }
     }
     

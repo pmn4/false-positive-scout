@@ -16,8 +16,8 @@ class OAuthManager: NSObject, ObservableObject {
     private let tokenEndpoint = "https://app.roboflow.com/oauth/token"
     private let validateEndpoint = "https://app.roboflow.com/oauth/validate"
     
-    // Client ID from Roboflow OAuth app (rfc_...)
-    private let clientId = "7b53bbdb-8056-43f1-b2be-77a6ddfbd547"
+    // Client ID from local Secrets.plist (gitignored). Empty when unset — OAuth stays shelved.
+    private var clientId: String { Secrets.roboflowOAuthClientID ?? "" }
     
     // Redirect URI: https:// relay page that forwards to scout:// custom URL scheme
     // The relay page at this URL immediately redirects to scout://oauth/callback + query params
