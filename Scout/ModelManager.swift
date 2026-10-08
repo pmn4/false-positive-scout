@@ -55,6 +55,8 @@ class ModelManager: ObservableObject {
     
     @Published var availableModels: [ModelVersion] = []
     @Published var currentModel: MLModel?
+    /// True once startup cache restore has finished (or there was nothing to restore).
+    @Published var isStartupReady = false
     @Published var currentVNCoreMLModel: VNCoreMLModel?
     @Published var isDownloading = false
     @Published var downloadProgress: Double = 0.0
@@ -1134,6 +1136,7 @@ class ModelManager: ObservableObject {
               let project = UserDefaults.standard.string(forKey: "scout_model_project"),
               let version = UserDefaults.standard.string(forKey: "scout_model_version"),
               !workspace.isEmpty, !project.isEmpty, !version.isEmpty else {
+            markStartupReady()
             return
         }
         
@@ -1143,15 +1146,27 @@ class ModelManager: ObservableObject {
         let cacheURL = getCacheURL(workspace: workspace, project: projectSlug, version: versionNum)
         
         guard fileManager.fileExists(atPath: cacheURL.path) else {
+            markStartupReady()
             return
         }
         
         Task {
+            defer { markStartupReady() }
             do {
                 try await loadCachedModel(from: cacheURL, workspace: workspace, project: projectSlug, version: versionNum)
             } catch {
                 // Silent fail at startup - user can retry in Settings
                 ScoutLog.decision("Failed to load cached model at startup: \(error)")
+            }
+        }
+    }
+    
+    private func markStartupReady() {
+        if Thread.isMainThread {
+            self.isStartupReady = true
+        } else {
+            DispatchQueue.main.async {
+                self.isStartupReady = true
             }
         }
     }
