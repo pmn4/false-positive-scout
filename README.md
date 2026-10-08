@@ -1,17 +1,24 @@
-# False Positive Scout
+<p align="center">
+  <img src="docs/media/scout-logo.png" width="120" alt="False Positive Scout">
+  &nbsp;🤝&nbsp;
+  <img src="https://cdn.sanity.io/images/ogxb3wbg/production/7b83a16a797c6c5d0b338e0742a72f5b70bb46c1-500x500.svg" width="120" alt="Lenny, Roboflow mascot">
+</p>
 
-<img src="docs/media/scout-demo.gif" alt="Scout demo" width="300" />
+# False Positive Scout
 
 Point your iPhone at things your Roboflow object detector wrongly “sees.” Scout runs **your** Core ML model live on device, saves frames **only while you hold the shutter**, lets you swipe-review them, and uploads the mistakes you keep back to that model’s Roboflow project as **null (empty) images** so the next train learns “this is not a stick.”
 
-Hard-negative mining you can do while walking around the house.
+Hard-negative mining you can do while walking around the house. There is **no TestFlight or App Store build** — clone, sideload with your own Xcode + Apple ID, and log in with Roboflow (OAuth only; no API key).
 
-There is **no TestFlight or App Store build**. You try Scout by cloning this repo and sideloading with your own Xcode + Apple ID. Never paste an API key into Scout — auth is OAuth only.
+**Roboflow:** [roboflow.com](https://roboflow.com) · [Docs](https://docs.roboflow.com) · [Forum](https://discuss.roboflow.com) · [RF-DETR](https://github.com/roboflow/rf-detr)
 
 ## Demo
 
-- **GIF (above):** short loop of Scout → Review → Upload
-- **Video (~36s):** [docs/media/scout-demo.mp4](docs/media/scout-demo.mp4)
+<p align="center">
+  <img src="docs/media/scout-demo.gif" alt="Scout demo" width="300" />
+</p>
+
+[Watch the ~36s walkthrough (MP4)](docs/media/scout-demo.mp4)
 
 ## Requirements
 
