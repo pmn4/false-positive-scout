@@ -17,7 +17,6 @@
 		A1000000F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000000E /* Assets.xcassets */; };
 		A10000011 /* OAuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000012 /* OAuthManager.swift */; };
 		A10000013 /* ModelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000014 /* ModelManager.swift */; };
-		A10000017 /* OAuthConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000018 /* OAuthConfig.swift */; };
 		A10000019 /* ThresholdManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000001A /* ThresholdManager.swift */; };
 		A1000001B /* ThresholdControlSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000001C /* ThresholdControlSheet.swift */; };
 		A1000001D /* ModelPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000001E /* ModelPickerSheet.swift */; };
@@ -39,7 +38,6 @@
 		A10000012 /* OAuthManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthManager.swift; sourceTree = "<group>"; };
 		A10000014 /* ModelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelManager.swift; sourceTree = "<group>"; };
 		A10000016 /* Scout.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Scout.entitlements; sourceTree = "<group>"; };
-		A10000018 /* OAuthConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthConfig.swift; sourceTree = "<group>"; };
 		A1000001A /* ThresholdManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThresholdManager.swift; sourceTree = "<group>"; };
 		A1000001C /* ThresholdControlSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThresholdControlSheet.swift; sourceTree = "<group>"; };
 		A1000001E /* ModelPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPickerSheet.swift; sourceTree = "<group>"; };
@@ -93,7 +91,6 @@
 				A1000001C /* ThresholdControlSheet.swift */,
 				A1000001E /* ModelPickerSheet.swift */,
 				A10000012 /* OAuthManager.swift */,
-				A10000018 /* OAuthConfig.swift */,
 				A10000014 /* ModelManager.swift */,
 				A1000001A /* ThresholdManager.swift */,
 				A10000006 /* RoboflowService.swift */,
@@ -199,7 +196,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nROOT=\"${SRCROOT}\"\nXCCONFIG=\"${ROOT}/Config/Secrets.xcconfig\"\nPLIST=\"${ROOT}/Config/Secrets.plist\"\nif [ ! -f \"$XCCONFIG\" ]; then\n  echo \"error: Secrets.xcconfig missing; copy Config/Secrets.xcconfig.example to Config/Secrets.xcconfig and fill it in\"\n  exit 1\nfi\nif [ ! -f \"$PLIST\" ]; then\n  echo \"error: Secrets.plist missing; copy Config/Secrets.plist.example to Config/Secrets.plist and fill it in\"\n  exit 1\nfi\n# Bundle the plist into the app (optional keys may be empty).\nif [ -n \"${TARGET_BUILD_DIR}\" ] && [ -n \"${UNLOCALIZED_RESOURCES_FOLDER_PATH}\" ]; then\n  DEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n  mkdir -p \"$DEST\"\n  cp -f \"$PLIST\" \"$DEST/Secrets.plist\"\nfi\n";
+			shellScript = "set -e\nROOT=\"${SRCROOT}\"\nXCCONFIG=\"${ROOT}/Config/Secrets.xcconfig\"\nPLIST=\"${ROOT}/Config/Secrets.plist\"\nif [ ! -f \"$XCCONFIG\" ]; then\n  echo \"error: Secrets.xcconfig missing; copy Config/Secrets.xcconfig.example to Config/Secrets.xcconfig and fill it in\"\n  exit 1\nfi\n# Secrets.plist is optional (OAuth / workspace defaults). Bundle it when present.\nif [ -f \"$PLIST\" ] && [ -n \"${TARGET_BUILD_DIR}\" ] && [ -n \"${UNLOCALIZED_RESOURCES_FOLDER_PATH}\" ]; then\n  DEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n  mkdir -p \"$DEST\"\n  cp -f \"$PLIST\" \"$DEST/Secrets.plist\"\nfi\n";
 			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
@@ -217,7 +214,6 @@
 				A1000000B /* SettingsView.swift in Sources */,
 				A1000000D /* Models.swift in Sources */,
 				A10000011 /* OAuthManager.swift in Sources */,
-				A10000017 /* OAuthConfig.swift in Sources */,
 				A10000013 /* ModelManager.swift in Sources */,
 				A10000019 /* ThresholdManager.swift in Sources */,
 				A1000001B /* ThresholdControlSheet.swift in Sources */,

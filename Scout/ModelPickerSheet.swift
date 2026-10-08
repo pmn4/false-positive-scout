@@ -21,14 +21,13 @@ struct ModelPickerSheet: View {
     @State private var isLoadingProjects = false
     @State private var isLoadingVersions = false
     @State private var errorMessage: String?
-    @State private var apiKey: String = ""
     
     var body: some View {
         NavigationView {
             Form {
                 CurrentModelSection(modelManager: modelManager)
                 
-                if !apiKey.isEmpty || oauthManager.isAuthenticated {
+                if oauthManager.isAuthenticated {
                     WorkspaceProjectSection(
                         workspaces: $workspaces,
                         projects: $projects,
@@ -51,7 +50,7 @@ struct ModelPickerSheet: View {
                     )
                 } else {
                     Section {
-                        Text("Configure an API key or sign in with OAuth in Settings to load models")
+                        Text("Log in with Roboflow in Settings to load models")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -75,7 +74,6 @@ struct ModelPickerSheet: View {
                 }
             }
             .onAppear {
-                apiKey = KeychainHelper.loadAPIKey() ?? Secrets.roboflowAPIKey ?? ""
                 if modelWorkspace.isEmpty, let ws = Secrets.roboflowWorkspace {
                     modelWorkspace = ws
                 }
@@ -88,7 +86,7 @@ struct ModelPickerSheet: View {
                         modelProject = proj
                     }
                 }
-                if !apiKey.isEmpty || oauthManager.isAuthenticated {
+                if oauthManager.isAuthenticated {
                     loadInitialData()
                 }
             }
@@ -101,8 +99,7 @@ struct ModelPickerSheet: View {
         
         Task {
             do {
-                let key = oauthManager.isAuthenticated ? nil : apiKey
-                let loadedWorkspaces = try await RoboflowService.shared.listWorkspaces(apiKey: key)
+                let loadedWorkspaces = try await RoboflowService.shared.listWorkspaces()
                 
                 await MainActor.run {
                     self.workspaces = loadedWorkspaces
@@ -132,8 +129,7 @@ struct ModelPickerSheet: View {
         
         Task {
             do {
-                let key = oauthManager.isAuthenticated ? nil : apiKey
-                let loadedProjects = try await RoboflowService.shared.listProjects(workspace: workspace, apiKey: key)
+                let loadedProjects = try await RoboflowService.shared.listProjects(workspace: workspace)
                 
                 await MainActor.run {
                     self.projects = loadedProjects
@@ -162,12 +158,7 @@ struct ModelPickerSheet: View {
         
         Task {
             do {
-                let key = oauthManager.isAuthenticated ? nil : apiKey
-                let loadedVersions = try await ModelManager.shared.listModelVersions(
-                    workspace: workspace,
-                    project: project,
-                    apiKey: key
-                )
+                let loadedVersions = try await ModelManager.shared.listModelVersions(workspace: workspace, project: project)
                 
                 await MainActor.run {
                     self.versions = loadedVersions
@@ -194,13 +185,7 @@ struct ModelPickerSheet: View {
         
         Task {
             do {
-                let key = oauthManager.isAuthenticated ? nil : apiKey
-                try await ModelManager.shared.downloadModel(
-                    workspace: workspace,
-                    project: project,
-                    version: modelVersion,
-                    apiKey: key
-                )
+                try await ModelManager.shared.downloadModel(workspace: workspace, project: project, version: modelVersion)
                 await MainActor.run {
                     errorMessage = nil
                 }

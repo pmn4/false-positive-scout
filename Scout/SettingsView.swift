@@ -1,4 +1,5 @@
 import SwiftUI
+import Security
 
 // "Whose world is this? The world is yours" - Nas (probably)
 // OAuth-based configuration for Roboflow
@@ -11,7 +12,6 @@ struct SettingsView: View {
     
     @ObservedObject var oauthManager = OAuthManager.shared
     @ObservedObject var modelManager = ModelManager.shared
-    @State private var apiKey: String = ""  // Load from Keychain on appear
     @State private var isSigningIn = false
     @State private var signInError: String?
     @State private var workspaces: [Workspace] = []
@@ -26,21 +26,11 @@ struct SettingsView: View {
     @State private var loadError: String?
     @State private var loadGeneration = 0  // Track async load generation to ignore stale results
     
-    // API key project picker state
-    @State private var apiKeyProjects: [Project] = []
-    @State private var isLoadingApiKeyProjects = false
-    @State private var apiKeyProjectsError: String?
-    @State private var showManualProjectEntry = false
-    
-    // Helper to determine active auth method
     private var authStatus: String {
         if oauthManager.isAuthenticated {
-            return "OAuth (Signed In)"
-        } else if !apiKey.isEmpty {
-            return "API Key"
-        } else {
-            return "Not Configured"
+            return "Signed In"
         }
+        return "Not Signed In"
     }
     
     var body: some View {
@@ -48,26 +38,30 @@ struct SettingsView: View {
             Form {
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(OAuthConfig.isEnabled ? "Sign in with Roboflow (OAuth) or paste an API key for quick setup." : "Paste an API key to get started.")
+                        Text("Log in with Roboflow to download models and upload null frames. Tokens stay in Keychain on this device.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                         
                         HStack {
-                            Text("Active Auth:")
+                            Text("Status:")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                             Text(authStatus)
                                 .font(.caption)
                                 .fontWeight(.semibold)
-                                .foregroundColor(oauthManager.isAuthenticated ? .green : (!apiKey.isEmpty ? .orange : .red))
+                                .foregroundColor(oauthManager.isAuthenticated ? .green : .red)
+                        }
+                        if oauthManager.isAuthenticated, let ws = oauthManager.workspaceURL, !ws.isEmpty {
+                            Text("Workspace: \(ws)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
                     }
                 } header: {
                     Text("About")
                 }
                 
-                if OAuthConfig.isEnabled {
-                    Section {
+                Section {
                     if oauthManager.isAuthenticated {
                         HStack {
                             Image(systemName: "checkmark.circle.fill")
@@ -77,24 +71,23 @@ struct SettingsView: View {
                         }
                         
                         Button(action: {
-                            oauthManager.signOut()
-                            workspaces = []
-                            projects = []
-                            modelVersions = []
-                            isLoadingProjects = false
-                            isLoadingVersions = false
-                            loadGeneration += 1  // Cancel in-flight loads
-                            // Clear previous* BEFORE selected* to prevent isRealChange wipe
-                            previousWorkspace = nil
-                            previousModelProject = nil
-                            selectedModelProject = nil
-                            selectedWorkspace = nil
-                            // Preserve API key upload project on sign out (API key path still needs it)
-                            // Do NOT clear: project, modelProject, modelVersion, or currentModel (keep cached model for API key fallback)
+                            Task {
+                                await oauthManager.signOut()
+                                workspaces = []
+                                projects = []
+                                modelVersions = []
+                                isLoadingProjects = false
+                                isLoadingVersions = false
+                                loadGeneration += 1
+                                previousWorkspace = nil
+                                previousModelProject = nil
+                                selectedModelProject = nil
+                                selectedWorkspace = nil
+                            }
                         }) {
                             HStack {
                                 Spacer()
-                                Text("Sign Out")
+                                Text("Log out")
                                     .foregroundColor(.red)
                                 Spacer()
                             }
@@ -110,7 +103,7 @@ struct SettingsView: View {
                                         .progressViewStyle(CircularProgressViewStyle())
                                         .padding(.trailing, 8)
                                 }
-                                Text(isSigningIn ? "Signing in..." : "Sign in with Roboflow")
+                                Text(isSigningIn ? "Logging in..." : "Log in with Roboflow")
                                     .fontWeight(.medium)
                                 Spacer()
                             }
@@ -123,95 +116,10 @@ struct SettingsView: View {
                                 .foregroundColor(.red)
                         }
                     }
-                    } header: {
-                        Text("Authentication")
-                    } footer: {
-                        Text("Recommended: Sign in with Roboflow for automatic workspace/project discovery. Works with free Apple Personal Team (no paid developer account needed).")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("API Key")
-                            .font(.headline)
-                        
-                        SecureField("Your Roboflow API key", text: $apiKey)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .disabled(oauthManager.isAuthenticated)
-                        
-                        if OAuthConfig.isEnabled && oauthManager.isAuthenticated {
-                            Text("⚠️ API key ignored while signed in with OAuth")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                        } else {
-                            Text(OAuthConfig.isEnabled ? "Alternative to OAuth. Get from Roboflow Settings > API" : "Get your API key from app.roboflow.com/settings/api")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Project")
-                                .font(.headline)
-                            Spacer()
-                            if isLoadingApiKeyProjects {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                            } else if !apiKey.isEmpty && !apiKeyProjects.isEmpty {
-                                Button(action: {
-                                    showManualProjectEntry.toggle()
-                                }) {
-                                    Text(showManualProjectEntry ? "Show List" : "Enter Manually")
-                                        .font(.caption)
-                                        .foregroundColor(.blue)
-                                }
-                            }
-                        }
-                        
-                        if showManualProjectEntry || apiKeyProjects.isEmpty {
-                            // Manual entry mode or no projects loaded
-                            TextField("my-workspace/my-project", text: $project)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                        } else {
-                            // Picker mode when projects are available
-                            Picker("Select Project", selection: $project) {
-                                Text("Select a project").tag("")
-                                ForEach(apiKeyProjects) { proj in
-                                    Text(proj.name).tag(proj.id)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                        }
-                        
-                        if let error = apiKeyProjectsError {
-                            Text("⚠️ \(error)")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                            Button("Retry") {
-                                loadApiKeyProjects()
-                            }
-                            .font(.caption)
-                        } else if !apiKeyProjects.isEmpty && !showManualProjectEntry {
-                            Text("\(apiKeyProjects.count) projects available")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text(OAuthConfig.isEnabled ? "Required for upload when using API key (optional for OAuth)" : "Your workspace/project slug (e.g., my-workspace/my-project)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 4)
                 } header: {
-                    Text(OAuthConfig.isEnabled ? "Use an API key instead" : "Authentication")
+                    Text("Account")
                 } footer: {
-                    Text(OAuthConfig.isEnabled ? "Alternative to OAuth. Get API key from app.roboflow.com/settings/api. OAuth takes priority when signed in." : "Required to upload, download models, and use Scout. Get your API key and project ID from app.roboflow.com/settings/api")
+                    Text("Uses OAuth PKCE (public client, no secret). Access tokens last ~24h and refresh automatically.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -481,7 +389,6 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .onChange(of: oauthManager.isAuthenticated) { isAuth in
                 // Reset state when OAuthManager self-signOut (refresh 400/401) flips isAuthenticated
-                // Match Sign Out button preserve semantics for dual-auth fallback
                 if !isAuth {
                     // Clear only ephemeral OAuth-populated @State (not AppStorage or cached model)
                     workspaces = []
@@ -496,13 +403,9 @@ struct SettingsView: View {
                     previousModelProject = nil
                     selectedModelProject = nil
                     selectedWorkspace = nil
-                    // Preserve API key upload project on self-signOut (API key path still needs it)
-                    // Do NOT clear: project, modelProject, modelWorkspace, modelVersion, or currentModel (keep cached model for API key fallback)
                 }
             }
             .onAppear {
-                // Load API key from Keychain
-                apiKey = KeychainHelper.loadAPIKey() ?? Secrets.roboflowAPIKey ?? ""
                 if modelWorkspace.isEmpty, let ws = Secrets.roboflowWorkspace {
                     modelWorkspace = ws
                 }
@@ -520,24 +423,8 @@ struct SettingsView: View {
                 if oauthManager.isAuthenticated && workspaces.isEmpty {
                     loadWorkspacesAndProjects()
                 }
-                
-                // Load projects for API key picker if API key is present
-                if !apiKey.isEmpty && apiKeyProjects.isEmpty {
-                    loadApiKeyProjects()
-                }
-                
+
                 // Model is now auto-loaded at app startup by ModelManager.init
-            }
-            .onChange(of: apiKey) { newValue in
-                // Save API key to Keychain (not plaintext UserDefaults)
-                if newValue.isEmpty {
-                    KeychainHelper.deleteAPIKey()
-                    apiKeyProjects = []
-                    apiKeyProjectsError = nil
-                } else {
-                    KeychainHelper.saveAPIKey(newValue)
-                    loadApiKeyProjects()
-                }
             }
         }
     }
@@ -645,55 +532,6 @@ struct SettingsView: View {
         }
     }
     
-    private func loadApiKeyProjects() {
-        guard !apiKey.isEmpty else {
-            apiKeyProjects = []
-            apiKeyProjectsError = nil
-            return
-        }
-        
-        isLoadingApiKeyProjects = true
-        apiKeyProjectsError = nil
-        showManualProjectEntry = false
-        
-        Task {
-            do {
-                // Try to get workspace from current project or load first workspace
-                var workspaceSlug: String?
-                
-                // If current project has workspace prefix, use it
-                if project.contains("/") {
-                    workspaceSlug = project.split(separator: "/").first.map(String.init)
-                }
-                
-                // Otherwise try to list workspaces and use first
-                if workspaceSlug == nil {
-                    let workspaces = try await RoboflowService.shared.listWorkspaces(apiKey: apiKey)
-                    workspaceSlug = workspaces.first?.url
-                }
-                
-                guard let workspace = workspaceSlug else {
-                    await MainActor.run {
-                        self.isLoadingApiKeyProjects = false
-                        self.apiKeyProjectsError = "No workspace found"
-                    }
-                    return
-                }
-                
-                let loadedProjects = try await RoboflowService.shared.listProjects(workspace: workspace, apiKey: apiKey)
-                await MainActor.run {
-                    self.apiKeyProjects = loadedProjects
-                    self.isLoadingApiKeyProjects = false
-                }
-            } catch {
-                await MainActor.run {
-                    self.isLoadingApiKeyProjects = false
-                    self.apiKeyProjectsError = error.localizedDescription
-                    self.apiKeyProjects = []
-                }
-            }
-        }
-    }
     
     private func loadModelVersions(workspace: String, project: String) {
         isLoadingVersions = true
@@ -703,8 +541,7 @@ struct SettingsView: View {
         
         Task {
             do {
-                let apiKey = oauthManager.isAuthenticated ? nil : KeychainHelper.loadAPIKey()
-                let versions = try await ModelManager.shared.listModelVersions(workspace: workspace, project: project, apiKey: apiKey)
+                let versions = try await ModelManager.shared.listModelVersions(workspace: workspace, project: project)
                 await MainActor.run {
                     // Ignore stale results (don't touch flag - newer load owns it)
                     guard self.loadGeneration == expectedGeneration else { return }
@@ -759,12 +596,10 @@ struct SettingsView: View {
         
         Task {
             do {
-                let apiKey = oauthManager.isAuthenticated ? nil : KeychainHelper.loadAPIKey()
                 try await ModelManager.shared.downloadModel(
                     workspace: modelWorkspace,
                     project: modelProject,
-                    version: modelVersion,
-                    apiKey: apiKey
+                    version: modelVersion
                 )
             } catch {
                 await MainActor.run {
@@ -775,68 +610,19 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - Keychain Helper for API Key
+// MARK: - Legacy Keychain cleanup
 
 struct KeychainHelper {
+    /// Legacy Keychain account from the removed paste-credential auth path.
     private static let apiKeyKey = "scout_api_key"
-    
-    static func saveAPIKey(_ key: String) {
-        let data = key.data(using: .utf8)!
-        
-        // Delete query: only class + account (no value)
-        let deleteQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: apiKeyKey
-        ]
-        SecItemDelete(deleteQuery as CFDictionary)
-        
-        // Add query: class + account + value + accessibility
-        let addQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: apiKeyKey,
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        ]
-        SecItemAdd(addQuery as CFDictionary, nil)
-    }
-    
-    static func loadAPIKey() -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: apiKeyKey,
-            kSecReturnData as String: true
-        ]
-        
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        
-        if status == errSecSuccess,
-           let data = result as? Data,
-           let key = String(data: data, encoding: .utf8) {
-            return key
-        }
-        
-        // One-time migration: check UserDefaults for old API key
-        if let oldKey = UserDefaults.standard.string(forKey: apiKeyKey), !oldKey.isEmpty {
-            // Migrate to Keychain
-            saveAPIKey(oldKey)
-            // Remove from UserDefaults
-            UserDefaults.standard.removeObject(forKey: apiKeyKey)
-            return oldKey
-        }
-        
-        return nil
-    }
-    
+
+    /// Delete leftover credential from earlier Scout builds (called once on upgrade).
     static func deleteAPIKey() {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: apiKeyKey
         ]
         SecItemDelete(query as CFDictionary)
+        UserDefaults.standard.removeObject(forKey: apiKeyKey)
     }
-}
-
-#Preview {
-    SettingsView()
 }

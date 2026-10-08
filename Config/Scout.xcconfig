@@ -1,2 +1,3 @@
 // Base config for Scout. Requires a local Secrets.xcconfig (see Secrets.xcconfig.example).
+// Secrets.plist is optional (OAuth client ID / workspace / project defaults).
 #include "Secrets.xcconfig"

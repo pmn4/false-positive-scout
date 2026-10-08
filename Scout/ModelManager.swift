@@ -115,29 +115,11 @@ class ModelManager: ObservableObject {
     
     // MARK: - Model Discovery
     
-    func listModelVersions(workspace: String, project: String, apiKey: String? = nil) async throws -> [ModelVersion] {
+    func listModelVersions(workspace: String, project: String) async throws -> [ModelVersion] {
         let projectSlug = project.split(separator: "/").last.map(String.init) ?? project
         
-        var url = URL(string: "https://api.roboflow.com/\(workspace)/\(projectSlug)")!
-        var request = URLRequest(url: url)
-        
-        if let key = apiKey, !key.isEmpty {
-            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-            components.queryItems = [URLQueryItem(name: "api_key", value: key)]
-            url = components.url!
-            request.url = url
-        } else if OAuthManager.shared.isAuthenticated {
-            let accessToken = try await OAuthManager.shared.getAccessToken()
-            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        } else {
-            throw ModelError.authenticationRequired
-        }
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw ModelError.listFailed
-        }
+        let request = URLRequest(url: URL(string: "https://api.roboflow.com/\(workspace)/\(projectSlug)")!)
+        let (data, httpResponse) = try await OAuthManager.shared.authorizedData(for: request)
         
         guard httpResponse.statusCode == 200 else {
             let errorBody = String(data: data, encoding: .utf8) ?? ""
@@ -218,7 +200,7 @@ class ModelManager: ObservableObject {
     
     // MARK: - Model Download & Caching
     
-    func downloadModel(workspace: String, project: String, version: String, apiKey: String? = nil) async throws {
+    func downloadModel(workspace: String, project: String, version: String) async throws {
         await MainActor.run {
             isDownloading = true
             downloadProgress = 0.0
@@ -257,8 +239,7 @@ class ModelManager: ObservableObject {
         }
         
         // Download Core ML model from Roboflow (roboflow-swift pattern)
-        var downloadURL = URL(string: "https://api.roboflow.com/coreml/\(projectSlug)/\(versionNum)")!
-        var components = URLComponents(url: downloadURL, resolvingAgainstBaseURL: false)!
+        var components = URLComponents(string: "https://api.roboflow.com/coreml/\(projectSlug)/\(versionNum)")!
         
         var queryItems: [URLQueryItem] = []
         
@@ -272,29 +253,14 @@ class ModelManager: ObservableObject {
         #endif
         
         queryItems.append(URLQueryItem(name: "nocache", value: "true"))
-        
-        if let key = apiKey, !key.isEmpty {
-            queryItems.append(URLQueryItem(name: "api_key", value: key))
-        }
-        
         components.queryItems = queryItems
-        downloadURL = components.url!
         
-        var request = URLRequest(url: downloadURL)
-        
-        if !(apiKey?.isEmpty ?? true) {
-        } else if OAuthManager.shared.isAuthenticated {
-            let accessToken = try await OAuthManager.shared.getAccessToken()
-            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        } else {
-            throw ModelError.authenticationRequired
-        }
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
+        guard let downloadURL = components.url else {
             throw ModelError.exportFailed
         }
+        
+        let request = URLRequest(url: downloadURL)
+        let (data, httpResponse) = try await OAuthManager.shared.authorizedData(for: request)
         
         guard httpResponse.statusCode == 200 else {
             let errorBody = String(data: data, encoding: .utf8) ?? ""
@@ -335,8 +301,7 @@ class ModelManager: ObservableObject {
         let (_, classColors) = try await fetchProjectMetadata(
             workspace: workspace,
             project: projectSlug,
-            version: versionNum,
-            apiKey: apiKey
+            version: versionNum
         )
         
         guard let modelURLString = coremlDict["model"] as? String,
@@ -346,7 +311,7 @@ class ModelManager: ObservableObject {
         }
         
         // Download the .mlmodel file (or .zip containing it)
-        let (tempURL, downloadResponse) = try await URLSession.shared.download(from: modelURL)
+        let (tempURL, downloadResponse) = try await OAuthManager.shared.authorizedDownload(from: modelURL)
         
         await MainActor.run {
             downloadStage = "Download complete"
@@ -490,34 +455,13 @@ class ModelManager: ObservableObject {
     private func fetchCoreMLClasses(
         workspace: String,
         project: String,
-        version: String,
-        apiKey: String?
+        version: String
     ) async throws -> [String] {
-        var coremlURL = URL(string: "https://api.roboflow.com/coreml/\(project)/\(version)")!
-        var components = URLComponents(url: coremlURL, resolvingAgainstBaseURL: false)!
+        let request = URLRequest(url: URL(string: "https://api.roboflow.com/coreml/\(project)/\(version)")!)
+        let (data, httpResponse) = try await OAuthManager.shared.authorizedData(for: request)
         
-        var queryItems: [URLQueryItem] = []
-        
-        if let key = apiKey, !key.isEmpty {
-            queryItems.append(URLQueryItem(name: "api_key", value: key))
-        }
-        
-        components.queryItems = queryItems
-        coremlURL = components.url!
-        
-        var request = URLRequest(url: coremlURL)
-        
-        if !(apiKey?.isEmpty ?? true) {
-        } else if OAuthManager.shared.isAuthenticated {
-            let accessToken = try await OAuthManager.shared.getAccessToken()
-            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        }
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-            ScoutLog.decision("🟡 [ScoutDetect] fetchCoreMLClasses failed: HTTP \(code)")
+        guard httpResponse.statusCode == 200 else {
+            ScoutLog.decision("🟡 [ScoutDetect] fetchCoreMLClasses failed: HTTP \(httpResponse.statusCode)")
             return []
         }
         
@@ -535,30 +479,16 @@ class ModelManager: ObservableObject {
     private func fetchProjectMetadata(
         workspace: String,
         project: String,
-        version: String,
-        apiKey: String?
+        version: String
     ) async throws -> ([String], [String: String]) {
         var classNames: [String] = []
         var classColors: [String: String] = [:]
         
-        var projectURL = URL(string: "https://api.roboflow.com/\(workspace)/\(project)")!
-        var request = URLRequest(url: projectURL)
+        let request = URLRequest(url: URL(string: "https://api.roboflow.com/\(workspace)/\(project)")!)
+        let (data, httpResponse) = try await OAuthManager.shared.authorizedData(for: request)
         
-        if let key = apiKey, !key.isEmpty {
-            var components = URLComponents(url: projectURL, resolvingAgainstBaseURL: false)!
-            components.queryItems = [URLQueryItem(name: "api_key", value: key)]
-            projectURL = components.url!
-            request.url = projectURL
-        } else if OAuthManager.shared.isAuthenticated {
-            let accessToken = try await OAuthManager.shared.getAccessToken()
-            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        }
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-            ScoutLog.decision("🟡 [ScoutDetect] fetchProjectMetadata failed: HTTP \(code)")
+        guard httpResponse.statusCode == 200 else {
+            ScoutLog.decision("🟡 [ScoutDetect] fetchProjectMetadata failed: HTTP \(httpResponse.statusCode)")
             return ([], [:])
         }
         
@@ -857,12 +787,10 @@ class ModelManager: ObservableObject {
         }
         
         if extractedLabels.isEmpty {
-            let apiKey = KeychainHelper.loadAPIKey()
             if let fetchedClasses = try? await fetchCoreMLClasses(
                 workspace: workspace,
                 project: projectSlug,
-                version: versionNum,
-                apiKey: apiKey
+                version: versionNum
             ), !fetchedClasses.isEmpty {
                 extractedLabels = fetchedClasses
                 labelSource = "/coreml (refetch)"
@@ -880,12 +808,10 @@ class ModelManager: ObservableObject {
         }
         
         if colors.isEmpty {
-            let apiKey = KeychainHelper.loadAPIKey()
             if let (_, fetchedColors) = try? await fetchProjectMetadata(
                 workspace: workspace,
                 project: projectSlug,
-                version: versionNum,
-                apiKey: apiKey
+                version: versionNum
             ) {
                 if !fetchedColors.isEmpty {
                     colors = fetchedColors
@@ -1818,7 +1744,7 @@ enum ModelError: LocalizedError {
         case .unsupportedModelTypeWithReason(let reason):
             return reason
         case .authenticationRequired:
-            return "Please configure a Roboflow API key in Settings"
+            return "Please log in with Roboflow in Settings"
         }
     }
 }

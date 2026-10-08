@@ -464,7 +464,6 @@ struct ExportSheet: View {
     @EnvironmentObject var frameStorage: FrameStorage
     @ObservedObject var oauthManager = OAuthManager.shared
     @AppStorage("scout_model_project") private var selectedModelProject: String = ""
-    @State private var apiKey: String = ""
     
     struct PartialSuccess: Identifiable {
         let id = UUID()
@@ -488,7 +487,7 @@ struct ExportSheet: View {
     @State private var isValidatingProjects = false
     
     private var canAuthenticate: Bool {
-        oauthManager.isAuthenticated || !apiKey.isEmpty
+        oauthManager.isAuthenticated
     }
     
     private var canUpload: Bool {
@@ -638,7 +637,7 @@ struct ExportSheet: View {
                     }
                     
                     if !canAuthenticate {
-                        Text("⚠️ Configure a Roboflow API key in Settings")
+                        Text("⚠️ Log in with Roboflow in Settings")
                             .font(.caption)
                             .foregroundColor(.orange)
                             .multilineTextAlignment(.center)
@@ -673,9 +672,6 @@ struct ExportSheet: View {
                 }
             }
         }
-        .onAppear {
-            apiKey = KeychainHelper.loadAPIKey() ?? Secrets.roboflowAPIKey ?? ""
-        }
     }
     
     private func projectsContain(_ list: [Project], projectId: String) -> Bool {
@@ -699,8 +695,7 @@ struct ExportSheet: View {
         }
         
         let loaded = try await RoboflowService.shared.listProjects(
-            workspace: workspace,
-            apiKey: apiKey.isEmpty ? nil : apiKey
+            workspace: workspace
         )
         await MainActor.run {
             projectsByWorkspace[workspace] = loaded
@@ -710,7 +705,7 @@ struct ExportSheet: View {
     
     private func uploadFrames() {
         guard canAuthenticate else {
-            errorMessage = "Please configure a Roboflow API key in Settings"
+            errorMessage = "Please log in with Roboflow in Settings"
             return
         }
         
@@ -777,8 +772,8 @@ struct ExportSheet: View {
                             imageName: imageName,
                             imageWidth: frame.imageWidth ?? Int(image.size.width),
                             imageHeight: frame.imageHeight ?? Int(image.size.height),
-                            project: project,
-                            apiKey: apiKey.isEmpty ? nil : apiKey
+                            project: project
+                            
                         )
                         
                         await MainActor.run {
@@ -804,9 +799,7 @@ struct ExportSheet: View {
                             imageName: imageName,
                             project: project,
                             tag: RoboflowService.defaultUploadTag,
-                            batchName: currentBatchName,
-                            apiKey: apiKey.isEmpty ? nil : apiKey
-                        )
+                            batchName: currentBatchName)
                         
                         await MainActor.run {
                             frameStorage.markUploaded(frame, imageId: imageId)
@@ -818,8 +811,8 @@ struct ExportSheet: View {
                                 imageName: imageName,
                                 imageWidth: frame.imageWidth ?? Int(image.size.width),
                                 imageHeight: frame.imageHeight ?? Int(image.size.height),
-                                project: project,
-                                apiKey: apiKey.isEmpty ? nil : apiKey
+                                project: project
+                                
                             )
                             
                             await MainActor.run {
@@ -875,8 +868,8 @@ struct ExportSheet: View {
                         imageName: partial.imageName,
                         imageWidth: Int(partial.image.size.width),
                         imageHeight: Int(partial.image.size.height),
-                        project: partial.project,
-                        apiKey: apiKey.isEmpty ? nil : apiKey
+                        project: partial.project
+                        
                     )
                     
                     retrySuccesses += 1
