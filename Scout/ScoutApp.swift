@@ -15,7 +15,7 @@ struct ScoutApp: App {
     private let splashMinSeconds: Double = 0.35
     private let splashMaxSeconds: Double = 2.0
     private let splashFadeSeconds: Double = 0.3
-    private let launchLogoPoints: CGFloat = 180
+    private let launchLogoPoints: CGFloat = 200
 
     var body: some Scene {
         WindowGroup {
@@ -30,7 +30,7 @@ struct ScoutApp: App {
                         Image("LaunchLogo")
                             .resizable()
                             .scaledToFit()
-                            .frame(width: launchLogoPoints, height: launchLogoPoints)
+                            .frame(width: launchLogoPoints)
                     }
                     .opacity(splashOpacity)
                     .allowsHitTesting(splashOpacity > 0.01)
