@@ -94,7 +94,7 @@ Code paths in `FrameReviewView` / `RoboflowService`:
 - **RF-DETR class order** comes from `GET /coreml/{project}/{version}` → `classes`. Index **0 is background** — skip `background_class*`.
 - **Colors** from `/coreml` can be shifted; take colors **by class name** from the project endpoint.
 - **Preprocessing** (Stretch vs letterbox) comes from version/model metadata; wrong mode misplaces boxes.
-- **Null annotation:** empty COCO `annotations: []` is rejected. Match the Python SDK: include `info` / `licenses` / `categories`, a fake annotation whose `image_id` matches no image, body `{ "annotationFile": <coco>, "labelmap": null }`, query `name=annotation.coco.json`. Upload `name` must equal COCO `file_name`.
+- **Null annotation:** empty COCO `annotations: []` is rejected. Match the Python SDK: include `info` / `licenses` / `categories`, a fake annotation whose `image_id` matches no image, body `{ "annotationFile": <coco> }` (no `labelmap`), query `name=annotation.coco.json&overwrite=true`. Upload image `name` must equal COCO `file_name`.
 - **OAuth + single-image upload:** `POST /dataset/{project}/upload` 500s with Bearer tokens — use zip upload instead.
 
 ## Privacy & signing
