@@ -1,0 +1,39 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-tests:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+          xcrun simctl list devices available | head -40
+
+      - name: Create Secrets.xcconfig from example
+        run: |
+          cp Config/Secrets.xcconfig.example Config/Secrets.xcconfig
+          # Dummy values so the fail-closed Check Secrets phase passes (no real secrets).
+          perl -pi -e 's/YOUR_TEAM_ID/ABCDE12345/; s/com\.yourname\.falsepositivescout/com.example.falsepositivescout/' Config/Secrets.xcconfig
+
+      - name: Run unit tests
+        run: |
+          # Pick first available iPhone simulator runtime.
+          DEST=$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/{gsub(/^ +| +$/,"",$1); print "platform=iOS Simulator,name="$1; exit}')
+          echo "Using destination: $DEST"
+          xcodebuild test \
+            -project Scout.xcodeproj \
+            -scheme Scout \
+            -destination "$DEST" \
+            CODE_SIGNING_ALLOWED=NO
+        # Note: Project is developed with Xcode 26+ locally. GitHub-hosted
+        # macos-15 images may ship an older Xcode; update the runner/Xcode
+        # selection if this job fails on toolchain mismatch.
