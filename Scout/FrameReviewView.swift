@@ -473,15 +473,10 @@ struct ExportSheet: View {
     @EnvironmentObject var frameStorage: FrameStorage
     @ObservedObject var oauthManager = OAuthManager.shared
     @AppStorage("scout_model_project") private var selectedModelProject: String = ""
+    /// Injected for tests; defaults to live RoboflowService.
+    var roboflowClient: RoboflowUploading = RoboflowService.shared
     
-    struct PartialSuccess: Identifiable {
-        let id = UUID()
-        let frameId: UUID
-        let imageId: String
-        let imageName: String
-        let image: UIImage
-        let project: String
-    }
+    // Retry list uses NullifyFailure from NullUploadOrchestrator.
     
     @Environment(\.openURL) private var openURL
     @State private var isUploading = false
@@ -490,27 +485,17 @@ struct ExportSheet: View {
     @State private var uploadComplete = false
     @State private var successCount = 0
     @State private var failureCount = 0
-    @State private var partialSuccesses: [PartialSuccess] = []
+    @State private var partialSuccesses: [NullifyFailure] = []
     @State private var uploadedBatches: [UploadedBatchLink] = []
     @State private var isRetrying = false
     @State private var currentBatchName: String = ""
-    @State private var projectsByWorkspace: [String: [Project]] = [:]
-    @State private var isValidatingProjects = false
-    
-    private static let scoutFilenameDateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone.current
-        f.dateFormat = "yyyyMMdd_HHmmss"
-        return f
-    }()
     
     private var canAuthenticate: Bool {
         oauthManager.isAuthenticated
     }
     
     private var canUpload: Bool {
-        canAuthenticate && !isValidatingProjects && !frames.isEmpty
+        canAuthenticate && !frames.isEmpty
     }
     
     private func targetProject(for frame: CapturedFrame) -> String? {
@@ -527,11 +512,7 @@ struct ExportSheet: View {
         projectId.split(separator: "/").last.map(String.init) ?? projectId
     }
     
-    private func workspaceSlug(from projectId: String) -> String? {
-        guard projectId.contains("/") else { return nil }
-        return String(projectId.split(separator: "/").first!)
-    }
-    
+        
     private var uploadTargetSummary: String {
         var counts: [String: Int] = [:]
         for frame in frames {
@@ -737,226 +718,42 @@ struct ExportSheet: View {
         }
     }
     
-    private func projectsContain(_ list: [Project], projectId: String) -> Bool {
-        let slug = projectSlug(projectId)
-        return list.contains { project in
-            project.id == projectId || project.id == slug || project.id.hasSuffix("/\(slug)")
-        }
-    }
-    
-    private func loadProjectsIfNeeded(for projectId: String) async throws -> [Project] {
-        guard let workspace = workspaceSlug(from: projectId) else {
-            throw RoboflowError.apiError(
-                statusCode: 0,
-                endpoint: "(project)",
-                body: "Project \"\(projectId)\" is missing a workspace prefix (expected workspace/project)."
-            )
-        }
-        
-        let cached = await MainActor.run { projectsByWorkspace[workspace] }
-        if let cached {
-            return cached
-        }
-        
-        let loaded = try await RoboflowService.shared.listProjects(
-            workspace: workspace
-        )
-        await MainActor.run {
-            projectsByWorkspace[workspace] = loaded
-        }
-        return loaded
-    }
     
     private func uploadFrames() {
         guard canAuthenticate else {
             errorMessage = "Please log in with Roboflow in Settings"
             return
         }
-        
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm"
-        currentBatchName = "Scout - \(dateFormatter.string(from: Date()))"
-        
+
+        currentBatchName = NullUploadOrchestrator.makeBatchName()
         isUploading = true
         errorMessage = nil
         uploadedBatches = []
         successCount = 0
         failureCount = 0
         partialSuccesses = []
-        
+
+        let framesToUpload = frames
+        let selected = selectedModelProject
+        let batch = currentBatchName
+        let client = roboflowClient
+
         Task {
-            // Partition: already-uploaded (nullify only) vs need upload
-            var needUploadByProject: [String: [(frame: CapturedFrame, image: UIImage, imageName: String)]] = [:]
-            var nullifyOnly: [(frame: CapturedFrame, image: UIImage, imageName: String, imageId: String, project: String)] = []
-            
-            for frame in frames {
-                guard let imageData = frame.imageData,
-                      let image = UIImage(data: imageData) else {
-                    await MainActor.run {
-                        failureCount += 1
-                        errorMessage = "Frame missing image data"
-                    }
-                    continue
-                }
-                
-                guard let project = targetProject(for: frame) else {
-                    await MainActor.run {
-                        failureCount += 1
-                        errorMessage = "Frame has no model project. Re-capture with a model loaded, or select a model in Settings for legacy frames."
-                    }
-                    continue
-                }
-                
-                do {
-                    let projects = try await loadProjectsIfNeeded(for: project)
-                    guard projectsContain(projects, projectId: project) else {
-                        await MainActor.run {
-                            failureCount += 1
-                            errorMessage = "Project \"\(project)\" is not in your Roboflow workspace. Skipping frame."
-                        }
-                        continue
-                    }
-                } catch {
-                    await MainActor.run {
-                        failureCount += 1
-                        errorMessage = "Could not verify project \"\(project)\": \(error.localizedDescription)"
-                    }
-                    continue
-                }
-                
-                let stamp = Self.scoutFilenameDateFormatter.string(from: Date())
-                let shortId = String(frame.id.uuidString.prefix(8)).lowercased()
-                let imageName = "scout_\(stamp)_\(shortId).jpg"
-                
-                if let existingImageId = frame.uploadedImageId, !existingImageId.isEmpty {
-                    nullifyOnly.append((frame, image, imageName, existingImageId, project))
-                } else {
-                    needUploadByProject[project, default: []].append((frame, image, imageName))
-                }
+            let orchestrator = NullUploadOrchestrator(client: client, store: frameStorage)
+            let run = await orchestrator.runUploadAndNullify(
+                frames: framesToUpload,
+                selectedModelProject: selected,
+                batchName: batch
+            ) { progress in
+                uploadProgress = progress
             }
-            
-            let totalFrames = frames.count
-            var completed = 0
-            
-            // Upload each project group as a zip
-            for (project, group) in needUploadByProject {
-                await MainActor.run {
-                    uploadProgress = UploadProgress(
-                        current: completed,
-                        total: totalFrames,
-                        currentImageName: projectSlug(project),
-                        stage: "Preparing zip for \(projectSlug(project))…"
-                    )
-                }
-                
-                var entries: [ZipUploadEntry] = []
-                for item in group {
-                    guard let jpeg = item.image.jpegData(compressionQuality: 0.8) else {
-                        await MainActor.run {
-                            failureCount += 1
-                            errorMessage = "Failed to encode JPEG for \(item.imageName)"
-                        }
-                        continue
-                    }
-                    entries.append(ZipUploadEntry(
-                        frameId: item.frame.id,
-                        imageName: item.imageName,
-                        jpegData: jpeg
-                    ))
-                }
-                
-                guard !entries.isEmpty else { continue }
-                
-                do {
-                    let zipResult = try await RoboflowService.shared.uploadImagesViaZip(
-                        entries: entries,
-                        project: project,
-                        batchName: currentBatchName,
-                        tags: [RoboflowService.defaultUploadTag]
-                    ) { stage in
-                        uploadProgress = UploadProgress(
-                            current: completed,
-                            total: totalFrames,
-                            currentImageName: "\(projectSlug(project)) · \(entries.count) images",
-                            stage: stage
-                        )
-                    }
-                    
-                    await MainActor.run {
-                        let linkId = zipResult.batchId ?? "project:\(zipResult.projectSlug)"
-                        uploadedBatches.append(UploadedBatchLink(
-                            id: linkId,
-                            projectSlug: zipResult.projectSlug,
-                            batchName: zipResult.batchName,
-                            url: zipResult.openURL,
-                            hasBatchId: zipResult.batchId != nil
-                        ))
-                    }
-                    
-                    for item in group {
-                        guard let imageId = zipResult.imageIds[item.frame.id] else {
-                            await MainActor.run {
-                                failureCount += 1
-                                errorMessage = "No image id resolved for \(item.imageName)"
-                            }
-                            continue
-                        }
-                        
-                        await MainActor.run {
-                            frameStorage.markUploaded(item.frame, imageId: imageId)
-                        }
-                        
-                        // Queue for nullify
-                        nullifyOnly.append((item.frame, item.image, item.imageName, imageId, project))
-                    }
-                } catch {
-                    await MainActor.run {
-                        failureCount += group.count
-                        errorMessage = error.localizedDescription
-                    }
-                }
-            }
-            
-            // Nullify all (including prior uploads)
-            let toNullify = nullifyOnly
-            for (index, item) in toNullify.enumerated() {
-                await MainActor.run {
-                    uploadProgress = UploadProgress(
-                        current: index + 1,
-                        total: max(toNullify.count, 1),
-                        currentImageName: item.imageName,
-                        stage: "Nullifying \(index + 1)/\(toNullify.count)…"
-                    )
-                }
-                
-                do {
-                    try await RoboflowService.shared.annotateAsNull(
-                        imageId: item.imageId,
-                        imageName: item.imageName,
-                        imageWidth: item.frame.imageWidth ?? Int(item.image.size.width),
-                        imageHeight: item.frame.imageHeight ?? Int(item.image.size.height),
-                        project: item.project
-                    )
-                    await MainActor.run {
-                        successCount += 1
-                        frameStorage.deleteFrame(item.frame)
-                        completed += 1
-                    }
-                } catch {
-                    await MainActor.run {
-                        partialSuccesses.append(PartialSuccess(
-                            frameId: item.frame.id,
-                            imageId: item.imageId,
-                            imageName: item.imageName,
-                            image: item.image,
-                            project: item.project
-                        ))
-                        errorMessage = error.localizedDescription
-                    }
-                }
-            }
-            
+
             await MainActor.run {
+                successCount = run.successCount
+                failureCount = run.failureCount
+                partialSuccesses = run.nullifyFailures
+                uploadedBatches = run.uploadedBatches
+                errorMessage = run.errorMessage
                 isUploading = false
                 uploadComplete = true
                 uploadProgress = nil
@@ -964,50 +761,23 @@ struct ExportSheet: View {
         }
     }
 
-    
     private func retryNullify() {
         guard !partialSuccesses.isEmpty else { return }
-        
+
         isRetrying = true
         errorMessage = nil
-        
+
         let toRetry = partialSuccesses
-        
+        let client = roboflowClient
+
         Task {
-            var remainingFailures: [PartialSuccess] = []
-            var retrySuccesses = 0
-            
-            for partial in toRetry {
-                do {
-                    try await RoboflowService.shared.annotateAsNull(
-                        imageId: partial.imageId,
-                        imageName: partial.imageName,
-                        imageWidth: Int(partial.image.size.width),
-                        imageHeight: Int(partial.image.size.height),
-                        project: partial.project
-                        
-                    )
-                    
-                    retrySuccesses += 1
-                    
-                    await MainActor.run {
-                        if let frame = frameStorage.frames.first(where: { $0.id == partial.frameId }) {
-                            frameStorage.deleteFrame(frame)
-                        }
-                    }
-                } catch {
-                    remainingFailures.append(partial)
-                    await MainActor.run {
-                        errorMessage = error.localizedDescription
-                    }
-                }
-                
-                try? await Task.sleep(nanoseconds: 500_000_000)
-            }
-            
+            let orchestrator = NullUploadOrchestrator(client: client, store: frameStorage)
+            let outcome = await orchestrator.retryNullify(failures: toRetry)
+
             await MainActor.run {
-                successCount += retrySuccesses
-                partialSuccesses = remainingFailures
+                successCount += outcome.successCount
+                partialSuccesses = outcome.remaining
+                errorMessage = outcome.errorMessage
                 isRetrying = false
             }
         }

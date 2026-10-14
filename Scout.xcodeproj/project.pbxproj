@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+
+		D10000020 /* RoboflowUploading.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000010 /* RoboflowUploading.swift */; };
+		D10000021 /* NullUploadOrchestrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000011 /* NullUploadOrchestrator.swift */; };
+		D10000022 /* MockRoboflowClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000012 /* MockRoboflowClient.swift */; };
+		D10000023 /* NullUploadOrchestratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000013 /* NullUploadOrchestratorTests.swift */; };
+		D10000024 /* fixture.png in Resources */ = {isa = PBXBuildFile; fileRef = D10000014 /* fixture.png */; };
 		A10000001 /* ScoutApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000 /* ScoutApp.swift */; };
 		A10000003 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000002 /* ContentView.swift */; };
 		A10000005 /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000004 /* CameraView.swift */; };
@@ -47,6 +53,13 @@
 		A10000043 /* Secrets.plist.example */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Secrets.plist.example; sourceTree = "<group>"; };
 		A10000044 /* Secrets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Secrets.swift; sourceTree = "<group>"; };
 		A10000045 /* Secrets.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000044 /* Secrets.swift */; };
+
+		D10000002 /* ScoutTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ScoutTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D10000010 /* RoboflowUploading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoboflowUploading.swift; sourceTree = "<group>"; };
+		D10000011 /* NullUploadOrchestrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NullUploadOrchestrator.swift; sourceTree = "<group>"; };
+		D10000012 /* MockRoboflowClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockRoboflowClient.swift; sourceTree = "<group>"; };
+		D10000013 /* NullUploadOrchestratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NullUploadOrchestratorTests.swift; sourceTree = "<group>"; };
+		D10000014 /* fixture.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = fixture.png; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -58,6 +71,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+
+		D10000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -65,6 +86,7 @@
 			isa = PBXGroup;
 			children = (
 				B00000000000000000000001 /* Scout */,
+				D10000008 /* ScoutTests */,
 				A10000042 /* Config */,
 				B00000000000000000000002 /* Products */,
 			);
@@ -94,6 +116,8 @@
 				A10000014 /* ModelManager.swift */,
 				A1000001A /* ThresholdManager.swift */,
 				A10000006 /* RoboflowService.swift */,
+				D10000010 /* RoboflowUploading.swift */,
+				D10000011 /* NullUploadOrchestrator.swift */,
 				A1000000C /* Models.swift */,
 				A10000030 /* ScoutLog.swift */,
 				A10000044 /* Secrets.swift */,
@@ -108,8 +132,20 @@
 			isa = PBXGroup;
 			children = (
 				A0FFFFFFF /* Scout.app */,
+				D10000002 /* ScoutTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+
+		D10000008 /* ScoutTests */ = {
+			isa = PBXGroup;
+			children = (
+				D10000012 /* MockRoboflowClient.swift */,
+				D10000013 /* NullUploadOrchestratorTests.swift */,
+				D10000014 /* fixture.png */,
+			);
+			path = ScoutTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -136,7 +172,45 @@
 			productReference = A0FFFFFFF /* Scout.app */;
 			productType = "com.apple.product-type.application";
 		};
+
+		D10000001 /* ScoutTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D10000009 /* Build configuration list for PBXNativeTarget "ScoutTests" */;
+			buildPhases = (
+				D10000003 /* Sources */,
+				D10000005 /* Frameworks */,
+				D10000004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D10000006 /* PBXTargetDependency */,
+			);
+			name = ScoutTests;
+			productName = ScoutTests;
+			productReference = D10000002 /* ScoutTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
+
+
+/* Begin PBXContainerItemProxy section */
+		D10000007 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A0FFFFFF9 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A0FFFFFFE;
+			remoteInfo = Scout;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+		D10000006 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A0FFFFFFE /* Scout */;
+			targetProxy = D10000007 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXProject section */
 		A0FFFFFF9 /* Project object */ = {
@@ -163,6 +237,7 @@
 			projectRoot = "";
 			targets = (
 				A0FFFFFFE /* Scout */,
+				D10000001 /* ScoutTests */,
 			);
 		};
 /* End PBXProject section */
@@ -173,6 +248,15 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000000F /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+
+		D10000004 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D10000024 /* fixture.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -210,6 +294,8 @@
 				A10000003 /* ContentView.swift in Sources */,
 				A10000005 /* CameraView.swift in Sources */,
 				A10000007 /* RoboflowService.swift in Sources */,
+				D10000020 /* RoboflowUploading.swift in Sources */,
+				D10000021 /* NullUploadOrchestrator.swift in Sources */,
 				A10000009 /* FrameReviewView.swift in Sources */,
 				A1000000B /* SettingsView.swift in Sources */,
 				A1000000D /* Models.swift in Sources */,
@@ -220,6 +306,16 @@
 				A1000001D /* ModelPickerSheet.swift in Sources */,
 				A10000031 /* ScoutLog.swift in Sources */,
 				A10000045 /* Secrets.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+
+		D10000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D10000022 /* MockRoboflowClient.swift in Sources */,
+				D10000023 /* NullUploadOrchestratorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -386,6 +482,51 @@
 			};
 			name = Release;
 		};
+
+		D1000000A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = A10000040 /* Scout.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.falsepositivescout.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Scout.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Scout";
+			};
+			name = Debug;
+		};
+		D1000000B /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = A10000040 /* Scout.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.falsepositivescout.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Scout.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Scout";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -403,6 +544,16 @@
 			buildConfigurations = (
 				A10000021 /* Debug */,
 				A10000022 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+
+		D10000009 /* Build configuration list for PBXNativeTarget "ScoutTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D1000000A /* Debug */,
+				D1000000B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

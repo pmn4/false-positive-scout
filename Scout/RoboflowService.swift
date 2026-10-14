@@ -56,7 +56,7 @@ struct ZipUploadResult {
     let projectSlug: String
 }
 
-class RoboflowService {
+class RoboflowService: RoboflowUploading {
     static let shared = RoboflowService()
 
     private init() {}
@@ -209,7 +209,7 @@ class RoboflowService {
         return URL(string: "https://app.roboflow.com/\(workspace)/\(projectSlug)/annotate")!
     }
 
-    private func initiateZipUpload(
+    func initiateZipUpload(
         workspace: String,
         projectSlug: String,
         batchName: String,
@@ -250,7 +250,7 @@ class RoboflowService {
         return (taskId, signedUrl)
     }
 
-    private func putSignedZip(signedUrl: URL, zipData: Data) async throws {
+    func putSignedZip(signedUrl: URL, zipData: Data) async throws {
         let endpoint = signedUrl.host.map { "PUT https://\($0)/…" } ?? "PUT signedUrl"
         var request = URLRequest(url: signedUrl)
         request.httpMethod = "PUT"
@@ -267,7 +267,7 @@ class RoboflowService {
         }
     }
 
-    private func pollZipTask(workspace: String, taskId: String) async throws -> [String: Any] {
+    func pollZipTask(workspace: String, taskId: String) async throws -> [String: Any] {
         let endpoint = "/\(workspace)/upload/zip/\(taskId)"
         let url = URL(string: "https://api.roboflow.com\(endpoint)")!
         let deadline = Date().addingTimeInterval(180)
@@ -311,7 +311,7 @@ class RoboflowService {
     }
 
     /// Prefer batch id from zip status JSON; else GET /{ws}/{project}/batches and match name.
-    private func resolveBatchId(
+    func resolveBatchId(
         workspace: String,
         projectSlug: String,
         batchName: String,
@@ -382,7 +382,7 @@ class RoboflowService {
         return nil
     }
 
-    private func resolveImageId(
+    func resolveImageId(
         workspace: String,
         projectSlug: String,
         filename: String
@@ -455,19 +455,14 @@ class RoboflowService {
 
     // MARK: - Annotate (null)
 
-    /// Annotate as null using COCO JSON (SDK fake-annotation workaround).
-    /// Uses workspace-path route that accepts OAuth Bearer tokens.
-    func annotateAsNull(
-        imageId: String,
+    /// COCO JSON for a null annotation (SDK fake-annotation workaround).
+    /// `file_name` must match the uploaded image name (e.g. `scout_…jpg`).
+    static func makeNullAnnotationCOCO(
         imageName: String,
         imageWidth: Int,
-        imageHeight: Int,
-        project: String
-    ) async throws {
-        let workspace = try resolveWorkspace(from: project)
-        let projectSlug = projectSlug(from: project)
-
-        let cocoJson: [String: Any] = [
+        imageHeight: Int
+    ) -> [String: Any] {
+        [
             "info": [
                 "description": "Scout null frame"
             ],
@@ -499,6 +494,26 @@ class RoboflowService {
                 ]
             ]
         ]
+    }
+
+
+    /// Annotate as null using COCO JSON (SDK fake-annotation workaround).
+    /// Uses workspace-path route that accepts OAuth Bearer tokens.
+    func annotateAsNull(
+        imageId: String,
+        imageName: String,
+        imageWidth: Int,
+        imageHeight: Int,
+        project: String
+    ) async throws {
+        let workspace = try resolveWorkspace(from: project)
+        let projectSlug = projectSlug(from: project)
+
+        let cocoJson = Self.makeNullAnnotationCOCO(
+            imageName: imageName,
+            imageWidth: imageWidth,
+            imageHeight: imageHeight
+        )
 
         guard let cocoJsonData = try? JSONSerialization.data(withJSONObject: cocoJson),
               let cocoJsonString = String(data: cocoJsonData, encoding: .utf8) else {
